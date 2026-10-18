@@ -50,7 +50,7 @@ wasm-pack build niimbot-b1-pwa --release --target web --out-dir www/pkg --no-typ
 python3 -m http.server 8787 -d niimbot-b1-pwa/www
 ```
 
-Open `http://localhost:8787` in Chrome or Edge, press Connect USB or Connect Bluetooth, pick the printer, press Print. Web Serial and Web Bluetooth only run on `https` or `localhost`. After the first visit the app installs from the address bar and opens offline. The label, its settings and its images save themselves in the browser as you edit and come back after a reload, on that browser only. To use it on other machines, serve `niimbot-b1-pwa/www` from any static `https` host.
+Open `http://localhost:8787` in Chrome or Edge, press Connect USB or Connect Bluetooth, pick the printer, press Print. Web Serial and Web Bluetooth only run on `https` or `localhost`. After the first visit the app installs from the address bar and opens offline. The label, its settings and its images save themselves in the browser as you edit and come back after a reload, on that browser only. To use it on other machines, serve `niimbot-b1-pwa/www` from any static `https` host, or run the image `ghcr.io/i-am-fatik/niimbot-b1-pwa` behind one. It serves the built app on port 8080, every file revalidated on each load, and every `v*` tag publishes a new version.
 
 | Field | Meaning |
 |---|---|
