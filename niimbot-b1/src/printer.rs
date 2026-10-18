@@ -5,19 +5,24 @@ use web_time::Instant;
 
 use crate::bitmap::Bitmap;
 use crate::error::Error;
+use crate::firmware::{self, Firmware};
 use crate::protocol::{
-    CALIBRATE, Command, Decoder, HEARTBEAT, Hex, LabelType, PAGE_END, PAGE_SIZE, PAGE_START,
-    PRINT_END, PRINT_START, PRINT_STATUS, PRINTER_ERROR, PRINTHEAD_PX, RFID_INFO, SET_DENSITY,
-    SET_LABEL_TYPE, packet, row_packet,
+    CALIBRATE, CONNECT, Command, Decoder, FIRMWARE_CHUNK, FIRMWARE_COMMIT, FIRMWARE_CRC,
+    FIRMWARE_CRC_WANTED, FIRMWARE_END, HEARTBEAT, Hex, LabelType, PAGE_END, PAGE_SIZE, PAGE_START,
+    PRINT_END, PRINT_START, PRINT_STATUS, PRINTER_ERROR, PRINTHEAD_PX, Packet, RFID_INFO,
+    SET_DENSITY, SET_LABEL_TYPE, START_UPGRADE, chunk_packet, packet, row_packet,
 };
 use crate::transport::Transport;
 
 const DEFAULT_ARG: &[u8] = &[1];
+const ACCEPTED: &[u8] = &[1];
 const SINGLE_COLOR: u8 = 0;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
 const PAGE_END_TIMEOUT: Duration = Duration::from_secs(10);
 const CALIBRATE_TIMEOUT: Duration = Duration::from_secs(20);
 const PRINT_TIMEOUT: Duration = Duration::from_secs(30);
+const FIRMWARE_TIMEOUT: Duration = Duration::from_secs(5);
+const FIRMWARE_CHUNK_LEN: usize = 200;
 const STATUS_POLL_INTERVAL: Duration = Duration::from_millis(300);
 const ALIGN_ROWS: usize = 8;
 
@@ -136,6 +141,11 @@ impl<T: Transport> Printer<T> {
     /// Returns the transport, for closing it.
     pub fn into_transport(self) -> T {
         self.transport
+    }
+
+    /// The transport, for asking which link it is.
+    pub fn transport(&self) -> &T {
+        &self.transport
     }
 
     /// Reads cover, battery, paper and RFID state.
@@ -258,6 +268,39 @@ impl<T: Transport> Printer<T> {
         Ok(())
     }
 
+    /// Writes `firmware` to the printer over the B1's upgrade exchange, calling `progress` with
+    /// the number of the chunk being sent and the chunk count. The printer turns itself off
+    /// when it is done.
+    ///
+    /// # Errors
+    ///
+    /// When the link fails, the printer does not answer, or it rejects the image's check or
+    /// the commit.
+    pub async fn flash(
+        &mut self,
+        firmware: &Firmware,
+        mut progress: impl FnMut(usize, usize),
+    ) -> Result<(), Error> {
+        let chunks: Vec<&[u8]> = firmware.image.chunks(FIRMWARE_CHUNK_LEN).collect();
+        self.request(CONNECT, DEFAULT_ARG).await?;
+        self.request(START_UPGRADE, &firmware::VERSION).await?;
+        self.receive(START_UPGRADE.code, FIRMWARE_CRC_WANTED, FIRMWARE_TIMEOUT)
+            .await?;
+        let crc = crc32fast::hash(&firmware.image).to_be_bytes();
+        let mut wanted = self.exchange(FIRMWARE_CRC, 0, &crc).await?;
+        while let Some(chunk) = chunks.get(usize::from(wanted.chunk)) {
+            progress(usize::from(wanted.chunk) + 1, chunks.len());
+            wanted = self.exchange(FIRMWARE_CHUNK, wanted.chunk, chunk).await?;
+        }
+        for step in [FIRMWARE_END, FIRMWARE_COMMIT] {
+            let answer = self.exchange(step, 0, DEFAULT_ARG).await?;
+            if answer.payload != ACCEPTED {
+                return Err(Error::printer(step.code, answer.payload));
+            }
+        }
+        Ok(())
+    }
+
     async fn wait_until_printed(&mut self, copies: u16) -> Result<(), Error> {
         let deadline = Instant::now() + PRINT_TIMEOUT;
         while Instant::now() < deadline {
@@ -282,19 +325,43 @@ impl<T: Transport> Printer<T> {
         timeout: Duration,
     ) -> Result<Vec<u8>, Error> {
         self.write(&packet(command.code, payload)).await?;
+        let response = self
+            .receive(command.code, command.response, timeout)
+            .await?;
+        Ok(response.payload)
+    }
+
+    async fn exchange(
+        &mut self,
+        command: Command,
+        chunk: u16,
+        payload: &[u8],
+    ) -> Result<Packet, Error> {
+        self.write(&chunk_packet(command.code, chunk, payload))
+            .await?;
+        self.receive(command.code, command.response, FIRMWARE_TIMEOUT)
+            .await
+    }
+
+    async fn receive(
+        &mut self,
+        sent: u8,
+        expected: u8,
+        timeout: Duration,
+    ) -> Result<Packet, Error> {
         let deadline = Instant::now() + timeout;
         loop {
             while let Some(response) = self.decoder.next_packet() {
-                if response.code == command.response {
-                    return Ok(response.payload);
+                if response.code == expected {
+                    return Ok(response);
                 }
                 if response.code == PRINTER_ERROR {
-                    return Err(Error::printer(command.code, response.payload));
+                    return Err(Error::printer(sent, response.payload));
                 }
             }
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
-                return Err(Error::timeout(command.code));
+                return Err(Error::timeout(sent));
             }
             let bytes = self.transport.read(remaining).await?;
             log::debug!("recv {}", Hex(&bytes));
@@ -366,6 +433,7 @@ mod tests {
         rfid: Vec<u8>,
         refuse: Option<u8>,
         silent: bool,
+        failed_check: bool,
     }
 
     impl Transport for Emulator {
@@ -380,6 +448,11 @@ mod tests {
                 0x1A => Some(packet(0x1B, &self.rfid)),
                 0xA3 => Some(packet(0xB3, &[0, 1, 100, 100])),
                 0x21 | 0x23 => Some(packet(sent.code + 0x10, &[1])),
+                0xF5 => Some([packet(0xF6, &[1]), chunk_packet(0x90, 0, &[1])].concat()),
+                0x91 => Some(chunk_packet(0x9A, 0, &[1])),
+                0x9B => Some(chunk_packet(0x9A, sent.chunk + 1, &[1])),
+                0x9C => Some(chunk_packet(0x9D, 0, &[u8::from(!self.failed_check)])),
+                0x92 => Some(chunk_packet(0x9E, 0, &[1])),
                 code => Some(packet(code + 1, &[1])),
             };
             if !self.silent {
@@ -500,6 +573,58 @@ mod tests {
                 .to_string()
                 .starts_with("printer error for command 0x01: 14")
         );
+    }
+
+    fn test_firmware(len: usize) -> Firmware {
+        Firmware {
+            name: "test",
+            image: (0..len).map(|at| u8::try_from(at % 251).unwrap()).collect(),
+        }
+    }
+
+    #[test]
+    fn flash_sends_every_chunk_and_commits() {
+        let firmware = test_firmware(450);
+        let mut printer = Printer::new(Emulator::default());
+        let mut counted = Vec::new();
+        block_on(printer.flash(&firmware, |sent, total| counted.push((sent, total)))).unwrap();
+        assert_eq!(counted, [(1, 3), (2, 3), (3, 3)]);
+        let written = printer.into_transport().written;
+        let codes: Vec<u8> = written.iter().map(|sent| sent.code).collect();
+        assert_eq!(codes, [0xC1, 0xF5, 0x91, 0x9B, 0x9B, 0x9B, 0x9C, 0x92]);
+        assert_eq!(written[1].payload, [6, 19]);
+        assert_eq!(
+            written[2].payload,
+            crc32fast::hash(&firmware.image).to_be_bytes()
+        );
+        let chunks: Vec<&Packet> = written.iter().filter(|sent| sent.code == 0x9B).collect();
+        assert_eq!(
+            chunks.iter().map(|sent| sent.chunk).collect::<Vec<_>>(),
+            [0, 1, 2]
+        );
+        assert_eq!(
+            chunks
+                .iter()
+                .flat_map(|sent| sent.payload.clone())
+                .collect::<Vec<_>>(),
+            firmware.image
+        );
+    }
+
+    #[test]
+    fn flash_stops_when_the_check_fails() {
+        let mut printer = Printer::new(Emulator {
+            failed_check: true,
+            ..Emulator::default()
+        });
+        let error = block_on(printer.flash(&test_firmware(10), |_, _| {})).unwrap_err();
+        assert!(error.is_printer());
+        assert!(
+            error
+                .to_string()
+                .starts_with("printer error for command 0x9c: 00")
+        );
+        assert!(!sent_codes(printer).contains(&0x92));
     }
 
     #[test]

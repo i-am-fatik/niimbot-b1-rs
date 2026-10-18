@@ -525,13 +525,28 @@ async fn unreadable_file_is_named_in_an_error() {
         &options,
     )
     .unwrap();
-    choose(&[file]);
+    choose("add-picture", &[file]);
     wait_for("the error", || {
         element::<HtmlElement>("status").class_name() == "error"
     })
     .await;
     assert!(text("status").contains("notes.png"));
     assert_eq!(layers(), ["Text"]);
+}
+
+#[wasm_bindgen_test]
+async fn unknown_firmware_is_refused() {
+    fresh().await;
+    assert!(button("flash").disabled());
+    let file =
+        File::new_with_str_sequence(&Array::of1(&"not firmware".into()), "random.bin").unwrap();
+    choose("firmware-file", &[file]);
+    wait_for("the refusal", || {
+        element::<HtmlElement>("status").class_name() == "error"
+    })
+    .await;
+    assert!(text("status").contains("random.bin is not a known B1 firmware image"));
+    assert!(button("flash").disabled());
 }
 
 #[wasm_bindgen_test]
@@ -625,16 +640,16 @@ fn page_style() -> Element {
 
 async fn add(files: &[File]) {
     let expected = layers().len() + files.len();
-    choose(files);
+    choose("add-picture", files);
     wait_for("the images to load", || layers().len() == expected).await;
 }
 
-fn choose(files: &[File]) {
+fn choose(input: &str, files: &[File]) {
     let transfer = DataTransfer::new().unwrap();
     for file in files {
         transfer.items().add_with_file(file).unwrap();
     }
-    let input: HtmlInputElement = element("add-picture");
+    let input: HtmlInputElement = element(input);
     input.set_files(transfer.files().as_ref());
     input
         .dispatch_event(&Event::new("change").unwrap())

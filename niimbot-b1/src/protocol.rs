@@ -1,4 +1,5 @@
 use std::fmt;
+use std::ops::RangeInclusive;
 
 /// Width of the print head in dots: 48 mm at 203 dpi.
 pub const PRINTHEAD_PX: usize = 384;
@@ -6,6 +7,8 @@ pub const PRINTHEAD_PX: usize = 384;
 const HEADER: [u8; 2] = [0x55, 0x55];
 const TRAILER: [u8; 2] = [0xAA, 0xAA];
 const FRAMING_LEN: usize = HEADER.len() + 2 + 1 + TRAILER.len();
+const CHUNK_FRAMING_LEN: usize = HEADER.len() + 4 + 4 + TRAILER.len();
+const FIRMWARE_EXCHANGE: RangeInclusive<u8> = 0x90..=0x9E;
 const ROW_SLICE_BYTES: usize = PRINTHEAD_PX / 8 / 3;
 const ROW_REPEAT: u8 = 1;
 
@@ -113,6 +116,31 @@ pub(crate) const PRINT_END: Command = Command {
     code: 0xF3,
     response: 0xF4,
 };
+pub(crate) const CONNECT: Command = Command {
+    code: 0xC1,
+    response: 0xC2,
+};
+pub(crate) const START_UPGRADE: Command = Command {
+    code: 0xF5,
+    response: 0xF6,
+};
+pub(crate) const FIRMWARE_CRC_WANTED: u8 = 0x90;
+pub(crate) const FIRMWARE_CRC: Command = Command {
+    code: 0x91,
+    response: 0x9A,
+};
+pub(crate) const FIRMWARE_CHUNK: Command = Command {
+    code: 0x9B,
+    response: 0x9A,
+};
+pub(crate) const FIRMWARE_END: Command = Command {
+    code: 0x9C,
+    response: 0x9D,
+};
+pub(crate) const FIRMWARE_COMMIT: Command = Command {
+    code: 0x92,
+    response: 0x9E,
+};
 
 const EMPTY_ROW: u8 = 0x84;
 const BITMAP_ROW: u8 = 0x85;
@@ -126,6 +154,20 @@ pub(crate) fn packet(code: u8, payload: &[u8]) -> Vec<u8> {
     packet.extend_from_slice(&[code, len]);
     packet.extend_from_slice(payload);
     packet.push(checksum);
+    packet.extend_from_slice(&TRAILER);
+    packet
+}
+
+pub(crate) fn chunk_packet(code: u8, chunk: u16, payload: &[u8]) -> Vec<u8> {
+    let len = u8::try_from(payload.len()).expect("payload fits one packet");
+    let mut packet = Vec::with_capacity(payload.len() + CHUNK_FRAMING_LEN);
+    packet.extend_from_slice(&HEADER);
+    packet.push(code);
+    packet.extend_from_slice(&chunk.to_be_bytes());
+    packet.push(len);
+    packet.extend_from_slice(payload);
+    let checksum = crc32fast::hash(&packet[HEADER.len()..]);
+    packet.extend_from_slice(&checksum.to_be_bytes());
     packet.extend_from_slice(&TRAILER);
     packet
 }
@@ -148,6 +190,7 @@ pub(crate) fn row_packet(y: u16, row: &[u8]) -> Vec<u8> {
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Packet {
     pub(crate) code: u8,
+    pub(crate) chunk: u16,
     pub(crate) payload: Vec<u8>,
 }
 
@@ -168,14 +211,26 @@ impl Decoder {
             return None;
         };
         self.buffer.drain(..start);
-        let len = usize::from(*self.buffer.get(3)?);
-        if self.buffer.len() < len + FRAMING_LEN {
+        let code = *self.buffer.get(2)?;
+        let chunked = FIRMWARE_EXCHANGE.contains(&code);
+        let (len_at, framing) = if chunked {
+            (5, CHUNK_FRAMING_LEN)
+        } else {
+            (3, FRAMING_LEN)
+        };
+        let len = usize::from(*self.buffer.get(len_at)?);
+        if self.buffer.len() < len + framing {
             return None;
         }
-        let frame: Vec<u8> = self.buffer.drain(..len + FRAMING_LEN).collect();
+        let frame: Vec<u8> = self.buffer.drain(..len + framing).collect();
         Some(Packet {
-            code: frame[2],
-            payload: frame[4..4 + len].to_vec(),
+            code,
+            chunk: if chunked {
+                u16::from_be_bytes([frame[3], frame[4]])
+            } else {
+                0
+            },
+            payload: frame[len_at + 1..len_at + 1 + len].to_vec(),
         })
     }
 }
@@ -232,6 +287,7 @@ mod tests {
             decoder.next_packet(),
             Some(Packet {
                 code: 0xDD,
+                chunk: 0,
                 payload: vec![1, 2, 3]
             })
         );
@@ -249,9 +305,35 @@ mod tests {
             decoder.next_packet(),
             Some(Packet {
                 code: 0x31,
+                chunk: 0,
                 payload: vec![1]
             })
         );
+    }
+
+    #[test]
+    fn firmware_packets_carry_a_chunk_number_and_a_crc32() {
+        let frame = chunk_packet(0x9B, 2, &[0xAB, 0xCD]);
+        assert_eq!(
+            frame,
+            [
+                0x55, 0x55, 0x9B, 0x00, 0x02, 0x02, 0xAB, 0xCD, 0xC7, 0xC8, 0x80, 0xE9, 0xAA, 0xAA
+            ]
+        );
+        let mut decoder = Decoder::default();
+        decoder.push(&frame[..7]);
+        assert_eq!(decoder.next_packet(), None);
+        decoder.push(&frame[7..]);
+        decoder.push(&packet(0x31, &[1]));
+        assert_eq!(
+            decoder.next_packet(),
+            Some(Packet {
+                code: 0x9B,
+                chunk: 2,
+                payload: vec![0xAB, 0xCD]
+            })
+        );
+        assert_eq!(decoder.next_packet().map(|next| next.code), Some(0x31));
     }
 
     #[test]

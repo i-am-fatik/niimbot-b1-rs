@@ -73,6 +73,12 @@ impl WebTransport {
         web_sys::window().is_some_and(|window| window.navigator().bluetooth().is_some())
     }
 
+    /// Whether the link is USB serial rather than Bluetooth.
+    #[must_use]
+    pub fn is_serial(&self) -> bool {
+        matches!(self.link, Link::Serial { .. })
+    }
+
     /// Asks the user to pick the printer's USB serial port and opens it.
     ///
     /// # Errors

@@ -786,9 +786,11 @@ name = "niimbot-b1"
 version = "0.1.0"
 dependencies = [
  "btleplug",
+ "crc32fast",
  "futures",
  "js-sys",
  "log",
+ "md-5",
  "serialport",
  "tokio",
  "wasm-bindgen",

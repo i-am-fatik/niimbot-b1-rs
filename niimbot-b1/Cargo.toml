@@ -16,7 +16,9 @@ ble = ["dep:btleplug", "dep:futures", "dep:tokio"]
 web = ["dep:js-sys", "dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:web-sys"]
 
 [dependencies]
+crc32fast = "1.5"
 log = "0.4"
+md-5 = "0.11"
 web-time = "1.1"
 serialport = { version = "4.10", optional = true, default-features = false }
 btleplug = { version = "0.13", optional = true }

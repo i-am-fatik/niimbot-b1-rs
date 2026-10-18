@@ -1,4 +1,5 @@
-//! `niimbot-b1`: print on a Niimbot B1 over USB or Bluetooth LE, and build the patched firmware.
+//! `niimbot-b1`: print on a Niimbot B1 over USB or Bluetooth LE, and build and flash the patched
+//! firmware.
 
 mod firmware;
 
@@ -8,7 +9,8 @@ use anyhow::Context as _;
 use clap::{Args, Parser, Subcommand};
 use log::LevelFilter;
 use niimbot_b1::{
-    Bitmap, BleTransport, LabelType, PrintOptions, Printer, Raster, SerialTransport, Transport,
+    Bitmap, BleTransport, Firmware, LabelType, PrintOptions, Printer, Raster, SerialTransport,
+    Transport,
 };
 
 #[derive(Debug, Parser)]
@@ -46,6 +48,10 @@ enum Command {
         about = "Build B1_6.19_density_align7.bin and its _nolock variant from the stock and community firmware"
     )]
     BuildFirmware(FirmwareArgs),
+    #[command(
+        about = "Flash the stock or a patched 6.19 image over USB, the printer turns off when done"
+    )]
+    Flash(FlashArgs),
 }
 
 #[derive(Debug, Subcommand)]
@@ -101,6 +107,12 @@ struct FirmwareArgs {
     keep_align3: bool,
 }
 
+#[derive(Debug, Args)]
+struct FlashArgs {
+    #[arg(help = "Firmware image, refused unless it is a known B1 6.19 image")]
+    image: PathBuf,
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
@@ -116,6 +128,25 @@ async fn main() -> anyhow::Result<()> {
         .init();
     match cli.command {
         Command::BuildFirmware(args) => firmware::build(&args.dir, args.keep_align3),
+        Command::Flash(args) => {
+            anyhow::ensure!(cli.ble.is_none(), "flashing runs over USB only");
+            let image = std::fs::read(&args.image)
+                .with_context(|| format!("reading {}", args.image.display()))?;
+            let firmware = Firmware::identify(image).with_context(|| {
+                format!("{} is not a known B1 firmware image", args.image.display())
+            })?;
+            let transport = SerialTransport::open(cli.port.as_deref()).context("use --port")?;
+            Printer::new(transport)
+                .flash(&firmware, |sent, total| {
+                    eprint!("\rflashing {} chunk {sent} of {total}", firmware.name());
+                })
+                .await?;
+            println!(
+                "\nflashed {}, the printer turns off, press its button to turn it back on",
+                firmware.name()
+            );
+            Ok(())
+        }
         Command::Printer(command) => {
             if let Some(address) = cli.ble {
                 let transport =

@@ -1,7 +1,8 @@
 //! Client for the Niimbot B1 thermal label printer.
 //!
 //! The printer speaks one protocol over USB serial and Bluetooth LE. [`Printer`] wraps it for
-//! status, RFID roll info and printing a [`Bitmap`], over any [`Transport`]. Transports for
+//! status, RFID roll info, printing a [`Bitmap`] and flashing a known [`Firmware`], over any
+//! [`Transport`]. Transports for
 //! native USB serial, native Bluetooth LE, and the browser's Web Serial and Web Bluetooth ship
 //! behind the `serial`, `ble` and `web` features.
 //!
@@ -22,12 +23,14 @@
 
 mod bitmap;
 mod error;
+mod firmware;
 mod printer;
 mod protocol;
 mod transport;
 
 pub use bitmap::{Bitmap, Raster};
 pub use error::Error;
+pub use firmware::Firmware;
 pub use printer::{Heartbeat, PrintOptions, PrintStatus, Printer, RfidInfo};
 pub use protocol::{LabelType, PRINTHEAD_PX};
 #[cfg(feature = "ble")]

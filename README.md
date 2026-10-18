@@ -5,7 +5,7 @@ A Rust port of the Python client in [vkolarik/niimbot-b1](https://github.com/vko
 | Crate | What it is |
 |---|---|
 | `niimbot-b1` | Library: status, RFID, calibration, printing a 1-bit bitmap over any `Transport` |
-| `niimbot-b1-cli` | The `niimbot-b1` binary: `info`, `print`, `calibrate`, `build-firmware` |
+| `niimbot-b1-cli` | The `niimbot-b1` binary: `info`, `print`, `calibrate`, `build-firmware`, `flash` |
 | `niimbot-b1-pwa` | Web app: compose a label, preview the exact dots, print over Web Serial or Web Bluetooth |
 
 ## CLI
@@ -43,6 +43,12 @@ curl -fsSL -o firmware/B1_6.19_density_coeff.bin https://raw.githubusercontent.c
 
 Writes `firmware/B1_6.19_density_align7.bin`, MD5 `540ef521d7416cfe1eb561b6effcb0b4`, only when both inputs are the expected firmware. Next to it goes `firmware/B1_6.19_density_align7_nolock.bin`, MD5 `6fd1612be6fb0cfb0ffb27808df3c44c`, the same image that never refuses a tagged roll with error `0x14`, so a used up, cloned or unwritable tag still prints at full darkness. What the patch does, how to flash it and how to roll back is in [firmware/README.md](https://github.com/vkolarik/niimbot-b1/blob/main/firmware/README.md). Flashing can brick the printer and voids the warranty.
 
+```sh
+./target/release/niimbot-b1 flash firmware/B1_6.19_density_align7_nolock.bin
+```
+
+Flashes over USB and refuses Bluetooth. It takes only those two images or the stock `B1_6.19_stock.bin`, recognized by MD5, and refuses any other file before touching the printer. The printer turns itself off when done, its button turns it back on. Flashing the stock file rolls back. The web app's Firmware section does the same over Connect USB.
+
 ## Web app
 
 ```sh
@@ -67,6 +73,7 @@ Open `http://localhost:8787` in Chrome or Edge, press Connect USB or Connect Blu
 | Image rotation, Rotate 90° | Turns the selected image to any angle, or a quarter turn clockwise per press. It refits to stay whole inside the label |
 | Image darkness | Left prints the selected image lighter, right darker, the middle leaves it as drawn |
 | Density, Copies, Media | Same as the CLI options |
+| Firmware | Pick a `.bin`, the app names it or refuses it. Flash over USB writes it after a confirmation, only the stock 6.19 image and the two patched ones, only over Connect USB, with progress in the status line. Hidden in browsers without Web Serial |
 
 ## Library
 
@@ -93,7 +100,7 @@ cargo test --workspace
 wasm-pack test --headless --chrome niimbot-b1-pwa
 ```
 
-The last line runs the web app's tests in headless Chrome against the real page: adding images, layers and the text layer, selecting, dragging, centre lines, edges, Center, touch gestures, size, rotation, darkness, orientation, field sizes, removing, saving and restoring.
+The last line runs the web app's tests in headless Chrome against the real page: adding images, layers and the text layer, selecting, dragging, centre lines, edges, Center, touch gestures, size, rotation, darkness, orientation, field sizes, removing, saving, restoring and refusing an unknown firmware image.
 
 ## Credits
 

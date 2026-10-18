@@ -1,5 +1,5 @@
 //! Browser app that composes a label on a canvas and prints it on a Niimbot B1 over Web Serial
-//! or Web Bluetooth.
+//! or Web Bluetooth, and flashes a known firmware image over Web Serial.
 
 mod gesture;
 mod label;
@@ -11,7 +11,8 @@ use std::cell::{Cell, RefCell};
 use std::fmt::Display;
 use std::rc::Rc;
 
-use niimbot_b1::{Bitmap, Error, LabelType, PrintOptions, Printer, Raster, WebTransport};
+use js_sys::Uint8Array;
+use niimbot_b1::{Bitmap, Error, Firmware, LabelType, PrintOptions, Printer, Raster, WebTransport};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::{JsFuture, spawn_local};
 use web_sys::{
@@ -110,6 +111,9 @@ struct Page {
     density: HtmlSelectElement,
     copies: HtmlInputElement,
     label_type: HtmlSelectElement,
+    firmware: HtmlElement,
+    firmware_file: HtmlInputElement,
+    flash: HtmlButtonElement,
 }
 
 #[derive(Debug)]
@@ -125,6 +129,7 @@ struct App {
     drag: Cell<Option<DragStart>>,
     pinch: Cell<Option<PinchStart>>,
     bitmap: RefCell<Bitmap>,
+    firmware: RefCell<Option<Firmware>>,
 }
 
 impl App {
@@ -168,6 +173,9 @@ impl App {
             density: element(&document, "density")?,
             copies: element(&document, "copies")?,
             label_type: element(&document, "label-type")?,
+            firmware: element(&document, "firmware")?,
+            firmware_file: element(&document, "firmware-file")?,
+            flash: element(&document, "flash")?,
         };
         let canvas = document.create_element("canvas")?.dyn_into()?;
         let storage = web_sys::window().and_then(|window| window.local_storage().ok().flatten());
@@ -188,6 +196,7 @@ impl App {
             drag: Cell::new(None),
             pinch: Cell::new(None),
             bitmap: RefCell::new(Bitmap::blank(0, 0)),
+            firmware: RefCell::new(None),
         })
     }
 
@@ -245,8 +254,15 @@ impl App {
         on(&page.print, "click", app, |app| {
             spawn_local(Rc::clone(app).print());
         })?;
+        on(&page.firmware_file, "change", app, |app| {
+            spawn_local(Rc::clone(app).choose_firmware());
+        })?;
+        on(&page.flash, "click", app, |app| {
+            spawn_local(Rc::clone(app).flash());
+        })?;
         if !WebTransport::serial_supported() {
             page.connect_usb.set_title(NO_SERIAL);
+            page.firmware.set_hidden(true);
         }
         if !WebTransport::bluetooth_supported() {
             page.connect_bluetooth.set_title(NO_BLUETOOTH);
@@ -778,6 +794,71 @@ impl App {
         self.settle(printer, outcome);
     }
 
+    async fn choose_firmware(self: Rc<Self>) {
+        let Some(file) = self
+            .page
+            .firmware_file
+            .files()
+            .and_then(|files| files.get(0))
+        else {
+            return;
+        };
+        let firmware = JsFuture::from(file.array_buffer())
+            .await
+            .ok()
+            .and_then(|buffer| Firmware::identify(Uint8Array::new(&buffer).to_vec()));
+        match &firmware {
+            Some(firmware) => self.say(&format!(
+                "{} is {}, Flash over USB writes it to the printer",
+                file.name(),
+                firmware.name()
+            )),
+            None => self.fail(format!(
+                "{} is not a known B1 firmware image, so it cannot be flashed",
+                file.name()
+            )),
+        }
+        *self.firmware.borrow_mut() = firmware;
+        self.sync_controls();
+    }
+
+    async fn flash(self: Rc<Self>) {
+        let Some(firmware) = self.firmware.borrow().clone() else {
+            return;
+        };
+        let question = format!(
+            "Flash {}? Keep the cable in and the printer on until it turns itself off. A broken flash can brick the printer.",
+            firmware.name()
+        );
+        let confirmed = web_sys::window()
+            .is_some_and(|window| window.confirm_with_message(&question).unwrap_or(false));
+        if !confirmed {
+            return;
+        }
+        let Some(mut printer) = self.take_printer() else {
+            return;
+        };
+        let flashed = printer
+            .flash(&firmware, |sent, total| {
+                self.say(&format!(
+                    "Flashing {}, chunk {sent} of {total}",
+                    firmware.name()
+                ));
+            })
+            .await;
+        match flashed {
+            Ok(()) => {
+                let _turned_off = printer.into_transport().close().await;
+                self.set_connection(Connection::Disconnected);
+                self.say(&format!(
+                    "Flashed {}. The printer turns off, press its button to turn it back on.",
+                    firmware.name()
+                ));
+            }
+            Err(error) => self.settle(printer, Err(error)),
+        }
+    }
+
     async fn disconnect(self: Rc<Self>) {
         let Some(printer) = self.take_printer() else {
             return;
@@ -834,6 +915,8 @@ impl App {
         let connection = self.connection.borrow();
         let disconnected = matches!(*connection, Connection::Disconnected);
         let ready = matches!(*connection, Connection::Ready(_));
+        let usb =
+            matches!(&*connection, Connection::Ready(printer) if printer.transport().is_serial());
         self.page
             .connect_usb
             .set_disabled(!disconnected || !WebTransport::serial_supported());
@@ -843,6 +926,9 @@ impl App {
         self.page.disconnect.set_hidden(disconnected);
         self.page.disconnect.set_disabled(!ready);
         self.page.print.set_disabled(!ready);
+        self.page
+            .flash
+            .set_disabled(!usb || self.firmware.borrow().is_none());
         if disconnected
             && self
                 .page
