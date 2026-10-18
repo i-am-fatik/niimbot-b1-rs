@@ -1,0 +1,43 @@
+[workspace]
+resolver = "3"
+members = ["niimbot-b1", "niimbot-b1-cli", "niimbot-b1-pwa"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT"
+repository = "https://github.com/i-am-fatik/niimbot-b1-rs"
+readme = "README.md"
+keywords = ["niimbot", "b1", "label-printer", "thermal-printer", "bluetooth-le"]
+categories = ["hardware-support"]
+
+[workspace.dependencies]
+niimbot-b1 = { path = "niimbot-b1", version = "0.1.0" }
+
+[workspace.lints.rust]
+missing_debug_implementations = "warn"
+missing_docs = "warn"
+redundant_lifetimes = "warn"
+trivial_numeric_casts = "warn"
+unsafe_code = "forbid"
+unsafe_op_in_unsafe_fn = "warn"
+unused_lifetimes = "warn"
+
+[workspace.lints.clippy]
+cargo = { level = "warn", priority = -1 }
+complexity = { level = "warn", priority = -1 }
+correctness = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+perf = { level = "warn", priority = -1 }
+style = { level = "warn", priority = -1 }
+suspicious = { level = "warn", priority = -1 }
+allow_attributes_without_reason = "warn"
+clone_on_ref_ptr = "warn"
+undocumented_unsafe_blocks = "warn"
+unused_result_ok = "warn"
+multiple_crate_versions = "allow"
+
+[profile.release]
+lto = true
+opt-level = "s"

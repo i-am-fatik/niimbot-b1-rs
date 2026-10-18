@@ -1,0 +1,48 @@
+[package]
+name = "niimbot-b1-pwa"
+description = "Installable web app that prints custom labels on a Niimbot B1 over Web Serial or Web Bluetooth"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+niimbot-b1 = { workspace = true, features = ["web"] }
+js-sys = "0.3"
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = [
+    "Blob",
+    "CanvasRenderingContext2d",
+    "console",
+    "Document",
+    "Element",
+    "Event",
+    "EventTarget",
+    "File",
+    "FileList",
+    "HtmlButtonElement",
+    "HtmlCanvasElement",
+    "HtmlElement",
+    "HtmlImageElement",
+    "HtmlInputElement",
+    "HtmlSelectElement",
+    "HtmlTextAreaElement",
+    "ImageData",
+    "Navigator",
+    "Node",
+    "ServiceWorkerContainer",
+    "Url",
+    "Window",
+] }
+
+[lints]
+workspace = true

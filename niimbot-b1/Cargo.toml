@@ -1,0 +1,56 @@
+[package]
+name = "niimbot-b1"
+description = "Niimbot B1 label printer protocol over USB serial, Bluetooth LE, Web Serial and Web Bluetooth"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[features]
+serial = ["dep:serialport"]
+ble = ["dep:btleplug", "dep:futures", "dep:tokio"]
+web = ["dep:js-sys", "dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:web-sys"]
+
+[dependencies]
+log = "0.4"
+web-time = "1.1"
+serialport = { version = "4.10", optional = true, default-features = false }
+btleplug = { version = "0.13", optional = true }
+futures = { version = "0.3", optional = true }
+tokio = { version = "1.53", optional = true, features = ["time"] }
+js-sys = { version = "0.3", optional = true }
+wasm-bindgen = { version = "0.2", optional = true }
+wasm-bindgen-futures = { version = "0.4", optional = true }
+web-sys = { version = "0.3", optional = true, features = [
+    "Bluetooth",
+    "BluetoothCharacteristicProperties",
+    "BluetoothDevice",
+    "BluetoothLeScanFilterInit",
+    "BluetoothRemoteGattCharacteristic",
+    "BluetoothRemoteGattServer",
+    "BluetoothRemoteGattService",
+    "EventTarget",
+    "Navigator",
+    "ReadableStream",
+    "ReadableStreamDefaultReader",
+    "RequestDeviceOptions",
+    "Serial",
+    "SerialOptions",
+    "SerialPort",
+    "Window",
+    "WritableStream",
+    "WritableStreamDefaultWriter",
+] }
+
+[dev-dependencies]
+futures = { version = "0.3", default-features = false, features = ["executor"] }
+
+[package.metadata.docs.rs]
+all-features = true
+
+[lints]
+workspace = true

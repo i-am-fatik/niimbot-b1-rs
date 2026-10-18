@@ -1,0 +1,88 @@
+# Niimbot B1 in Rust
+
+A Rust port of the Python client in [vkolarik/niimbot-b1](https://github.com/vkolarik/niimbot-b1): one protocol library, a command-line tool, and an installable web app that prints custom labels from Chrome or Edge over USB or Bluetooth. It writes the same bytes as the Python client and builds the same patched firmware.
+
+| Crate | What it is |
+|---|---|
+| `niimbot-b1` | Library: status, RFID, calibration, printing a 1-bit bitmap over any `Transport` |
+| `niimbot-b1-cli` | The `niimbot-b1` binary: `info`, `print`, `calibrate`, `build-firmware` |
+| `niimbot-b1-pwa` | Web app: compose a label, preview the exact dots, print over Web Serial or Web Bluetooth |
+
+## CLI
+
+```sh
+cargo build --release -p niimbot-b1-cli
+./target/release/niimbot-b1 info
+./target/release/niimbot-b1 print label.png -d 5
+./target/release/niimbot-b1 --ble info
+```
+
+| Option | Default | Meaning |
+|---|---|---|
+| `-p, --port` | autodetect | USB serial port, `/dev/cu.usbmodemB1_<serial>` on macOS, `/dev/ttyACM*` on Linux |
+| `--ble[=ADDRESS]` | off | Bluetooth LE, optionally a device address or platform id |
+| `-v, --verbose` | off | Log every packet |
+| `print -d, --density` | `5` | `1` light to `5` dark |
+| `print -n, --copies` | `1` | Copies |
+| `print -t, --label-type`, `calibrate -t` | `1` | `1` gap, `2` black mark, `3` continuous, `5` transparent |
+| `print --align` | off | Feed to the next gap first, for stock firmware after closing the cover without a tag |
+| `print --threshold` | off | Threshold instead of the Pillow-identical dithering |
+| `build-firmware --dir` | `firmware` | Directory with the two inputs, receives the output |
+| `build-firmware --keep-align3` | off | Also write `B1_6.19_density_align3.bin` |
+
+The image prints as is, its width across the 384 dot head. macOS asks for Bluetooth permission on the first `--ble` run, see [bluetooth.md](https://github.com/vkolarik/niimbot-b1/blob/main/docs/bluetooth.md).
+
+## Firmware
+
+```sh
+mkdir -p firmware
+curl -fsSL -o firmware/B1_6.19_stock.bin https://fw.niim.blue/stable/B1/B1_6.19.bin
+curl -fsSL -o firmware/B1_6.19_density_coeff.bin https://raw.githubusercontent.com/lotabout/niimbot/niimbot-hw6.01/firmware/B1_6.19_density_coeff.bin
+./target/release/niimbot-b1 build-firmware --dir firmware
+```
+
+Writes `firmware/B1_6.19_density_align7.bin`, MD5 `540ef521d7416cfe1eb561b6effcb0b4`, only when both inputs are the expected firmware. What the patch does, how to flash it and how to roll back is in [firmware/README.md](https://github.com/vkolarik/niimbot-b1/blob/main/firmware/README.md). Flashing can brick the printer and voids the warranty.
+
+## Web app
+
+```sh
+wasm-pack build niimbot-b1-pwa --release --target web --out-dir www/pkg --no-typescript --no-pack
+python3 -m http.server 8787 -d niimbot-b1-pwa/www
+```
+
+Open `http://localhost:8787` in Chrome or Edge, press Connect USB or Connect Bluetooth, pick the printer, press Print. Web Serial and Web Bluetooth only run on `https` or `localhost`. After the first visit the app installs from the address bar and opens offline. To use it on other machines, serve `niimbot-b1-pwa/www` from any static `https` host.
+
+| Field | Meaning |
+|---|---|
+| Width, Height mm | Label size at 8 dots per mm, width capped at the 48 mm head |
+| Rendering | Sharp thresholds text, Dithered suits photos |
+| Image | Drawn under the text, scaled to fit the label |
+| Density, Copies, Media | Same as the CLI options |
+
+## Library
+
+```toml
+[dependencies]
+niimbot-b1 = { git = "https://github.com/i-am-fatik/niimbot-b1-rs", features = ["serial"] }
+```
+
+| Feature | Adds |
+|---|---|
+| `serial` | `SerialTransport`, `find_port` |
+| `ble` | `BleTransport`, needs a tokio runtime |
+| `web` | `WebTransport` for `wasm32-unknown-unknown`, needs `--cfg=web_sys_unstable_apis` as set in `.cargo/config.toml` |
+
+API docs: `cargo doc -p niimbot-b1 --features serial,ble --open`. The wire protocol is in [protocol.md](https://github.com/vkolarik/niimbot-b1/blob/main/docs/protocol.md).
+
+## Checks
+
+```sh
+cargo fmt --all --check
+cargo clippy --workspace --all-targets --exclude niimbot-b1-pwa
+cargo clippy -p niimbot-b1-pwa --target wasm32-unknown-unknown
+cargo test --workspace --exclude niimbot-b1-pwa
+```
+
+## Credits
+
+Protocol, print sequence and firmware patch from [vkolarik/niimbot-b1](https://github.com/vkolarik/niimbot-b1), which credits [niimbluelib](https://github.com/MultiMote/niimbluelib) and [lotabout/niimbot](https://github.com/lotabout/niimbot). MIT, see [LICENSE](LICENSE).

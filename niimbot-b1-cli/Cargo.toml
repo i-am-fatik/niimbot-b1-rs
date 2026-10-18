@@ -1,0 +1,28 @@
+[package]
+name = "niimbot-b1-cli"
+description = "Command-line client and firmware patch builder for the Niimbot B1 label printer"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[[bin]]
+name = "niimbot-b1"
+path = "src/main.rs"
+
+[dependencies]
+niimbot-b1 = { workspace = true, features = ["serial", "ble"] }
+anyhow = "1"
+clap = { version = "4.6", features = ["derive"] }
+env_logger = { version = "0.11", default-features = false }
+image = { version = "0.25", default-features = false, features = ["bmp", "gif", "jpeg", "png", "webp"] }
+log = "0.4"
+md-5 = "0.11"
+tokio = { version = "1.53", features = ["macros", "rt"] }
+
+[lints]
+workspace = true

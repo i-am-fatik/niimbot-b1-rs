@@ -1,0 +1,15 @@
+{
+  "name": "B1 Labels",
+  "short_name": "B1 Labels",
+  "description": "Print custom labels on a Niimbot B1 over USB or Bluetooth.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f4f2ec",
+  "theme_color": "#1d2a33",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ]
+}
