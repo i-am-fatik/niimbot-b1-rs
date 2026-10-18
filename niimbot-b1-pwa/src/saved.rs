@@ -10,9 +10,10 @@ use web_sys::{
 use crate::label::Picture;
 
 const KEY: &str = "b1-labels";
-const FIELDS: [&str; 12] = [
+const FIELDS: [&str; 13] = [
     "width",
     "height",
+    "orientation",
     "text",
     "font-size",
     "font",

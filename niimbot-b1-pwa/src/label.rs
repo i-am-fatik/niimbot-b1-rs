@@ -117,6 +117,7 @@ impl Picture {
 pub(crate) struct Label {
     pub(crate) width_mm: u16,
     pub(crate) height_mm: u16,
+    pub(crate) vertical: bool,
     pub(crate) text: String,
     pub(crate) font_size: u16,
     pub(crate) font: String,
@@ -136,8 +137,17 @@ impl Label {
         u32::from(self.height_mm) * DOTS_PER_MM
     }
 
+    fn upright(&self) -> (u32, u32) {
+        if self.vertical {
+            (self.height(), self.width())
+        } else {
+            (self.width(), self.height())
+        }
+    }
+
     pub(crate) fn picture_at(&self, pictures: &[Picture], point: (f64, f64)) -> Option<usize> {
-        let label = (f64::from(self.width()), f64::from(self.height()));
+        let (width, height) = self.upright();
+        let label = (f64::from(width), f64::from(height));
         pictures
             .iter()
             .rposition(|picture| picture.frame(label).contains(point))
@@ -148,7 +158,7 @@ impl Label {
         canvas: &HtmlCanvasElement,
         pictures: &[Picture],
     ) -> Result<Bitmap, JsValue> {
-        let (width, height) = (self.width(), self.height());
+        let (width, height) = self.upright();
         canvas.set_width(width);
         canvas.set_height(height);
         let context = context(canvas)?;
@@ -211,32 +221,60 @@ impl Label {
             .get_image_data(0, 0, signed(width), signed(height))?
             .data()
             .0;
+        let pixels = if self.vertical {
+            turn_clockwise(&pixels, dots(width), dots(height))
+        } else {
+            pixels
+        };
         Ok(Bitmap::from_rgba(
-            dots(width),
-            dots(height),
+            dots(self.width()),
+            dots(self.height()),
             &pixels,
             self.raster,
         ))
     }
+
+    pub(crate) fn show(&self, bitmap: &Bitmap, preview: &HtmlCanvasElement) -> Result<(), JsValue> {
+        let (width, height) = self.upright();
+        let rgba = upright_rgba(bitmap, self.vertical);
+        preview.set_width(width);
+        preview.set_height(height);
+        let image = ImageData::new_with_u8_clamped_array_and_sh(Clamped(&rgba), width, height)?;
+        context(preview)?.put_image_data(&image, 0, 0)
+    }
 }
 
-pub(crate) fn show(bitmap: &Bitmap, preview: &HtmlCanvasElement) -> Result<(), JsValue> {
+fn turn_clockwise(rgba: &[u8], width: usize, height: usize) -> Vec<u8> {
+    let pixels = rgba.as_chunks::<4>().0;
+    let mut turned = Vec::with_capacity(rgba.len());
+    for row in 0..width {
+        for column in 0..height {
+            turned.extend_from_slice(&pixels[(height - 1 - column) * width + row]);
+        }
+    }
+    turned
+}
+
+fn upright_rgba(bitmap: &Bitmap, vertical: bool) -> Vec<u8> {
     let (width, height) = (bitmap.width(), bitmap.height());
+    let (rows, columns) = if vertical {
+        (width, height)
+    } else {
+        (height, width)
+    };
     let mut rgba = Vec::with_capacity(width * height * 4);
-    for y in 0..height {
-        for x in 0..width {
+    for row in 0..rows {
+        for column in 0..columns {
+            let (x, y) = if vertical {
+                (width - 1 - row, column)
+            } else {
+                (column, row)
+            };
             let level = if bitmap.is_black(x, y) { 0 } else { 255 };
             rgba.extend_from_slice(&[level, level, level, 255]);
         }
     }
-    let (width, height) = (
-        u32::try_from(width).map_err(error)?,
-        u32::try_from(height).map_err(error)?,
-    );
-    preview.set_width(width);
-    preview.set_height(height);
-    let image = ImageData::new_with_u8_clamped_array_and_sh(Clamped(&rgba), width, height)?;
-    context(preview)?.put_image_data(&image, 0, 0)
+    rgba
 }
 
 fn context(canvas: &HtmlCanvasElement) -> Result<CanvasRenderingContext2d, JsValue> {
@@ -299,10 +337,6 @@ fn dots(dots: u32) -> usize {
     usize::try_from(dots).expect("label dots fit usize")
 }
 
-fn error(error: impl std::fmt::Display) -> JsValue {
-    JsValue::from_str(&error.to_string())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -317,6 +351,16 @@ mod tests {
             .flat_map(|y| (0..64).map(move |x| (x, y)))
             .filter(|&(x, y)| bitmap.is_black(x, y))
             .count()
+    }
+
+    #[test]
+    fn vertical_print_is_the_preview_turned_clockwise() {
+        let upright: Vec<u8> = (0..6)
+            .flat_map(|index| gray(if index == 0 { 0 } else { 255 }, 1))
+            .collect();
+        let bitmap = Bitmap::from_rgba(2, 3, &turn_clockwise(&upright, 3, 2), Raster::Threshold);
+        assert!(bitmap.is_black(1, 0));
+        assert_eq!(upright_rgba(&bitmap, true), upright);
     }
 
     #[test]

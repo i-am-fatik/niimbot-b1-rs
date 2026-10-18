@@ -72,6 +72,7 @@ struct Page {
     size: HtmlElement,
     width: HtmlInputElement,
     height: HtmlInputElement,
+    orientation: HtmlSelectElement,
     text: HtmlTextAreaElement,
     font_size: HtmlInputElement,
     font: HtmlSelectElement,
@@ -120,6 +121,7 @@ impl App {
             size: element(&document, "size")?,
             width: element(&document, "width")?,
             height: element(&document, "height")?,
+            orientation: element(&document, "orientation")?,
             text: element(&document, "text")?,
             font_size: element(&document, "font-size")?,
             font: element(&document, "font")?,
@@ -160,9 +162,10 @@ impl App {
 
     fn wire(app: &Rc<Self>) -> Result<(), JsValue> {
         let page = &app.page;
-        let label_fields: [&HtmlElement; 9] = [
+        let label_fields: [&HtmlElement; 10] = [
             &page.width,
             &page.height,
+            &page.orientation,
             &page.text,
             &page.font_size,
             &page.font,
@@ -217,6 +220,7 @@ impl App {
         Label {
             width_mm: parse(&page.width.value(), 50).clamp(10, 50),
             height_mm: parse(&page.height.value(), 30).clamp(5, 300),
+            vertical: page.orientation.value() == "vertical",
             text: page.text.value(),
             font_size: parse(&page.font_size.value(), 48).clamp(6, 400),
             font: page.font.value(),
@@ -248,7 +252,7 @@ impl App {
         let label = self.label();
         let rendered = label
             .rasterize(&self.canvas, &self.pictures.borrow())
-            .and_then(|bitmap| label::show(&bitmap, &self.page.preview).map(|()| bitmap));
+            .and_then(|bitmap| label.show(&bitmap, &self.page.preview).map(|()| bitmap));
         match rendered {
             Ok(bitmap) => {
                 self.page.size.set_text_content(Some(&format!(

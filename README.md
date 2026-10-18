@@ -55,6 +55,7 @@ Open `http://localhost:8787` in Chrome or Edge, press Connect USB or Connect Blu
 | Field | Meaning |
 |---|---|
 | Width, Height mm | Label size at 8 dots per mm, width capped at the 48 mm head |
+| Orientation | Vertical lays the label out a quarter turn round, upright in the preview and turned back on print. Width and Height stay the label as loaded |
 | Rendering | Sharp thresholds text, Dithered suits photos |
 | Images | Add one or more, drawn under the text in the order added. Press one on the preview or pick it in the list to select it, drag to move it, Remove deletes it |
 | Image size | Scales the selected image from a tenth to four times its fitted size |
