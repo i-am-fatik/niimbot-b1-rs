@@ -62,6 +62,7 @@ Open `http://localhost:8787` in Chrome or Edge, press Connect USB or Connect Blu
 | Layers, Move up, Move down, Center | The list shows the top layer first, the text included. Move up and Move down move the selected image or the text one layer, Center puts it in the middle of the label |
 | Edges | An image's or the text's centre always stays on the label, so part of it stays on the preview to grab. A drag stops at the edge, a smaller or turned label pulls layers back, and a layer lost in an older save comes back on opening |
 | Centre lines | While you drag, an image or the text sticks to the label's vertical and horizontal centre lines within 6 dots, and a guide shows each line it sticks to. The guides never print |
+| Touch gestures | Two fingers on the preview edit the selected layer: pinch to resize, twist to rotate with right angles sticking within 5°, move both to move it. A pinch on the text changes its font size. Lifting one finger lets the other keep dragging. On a phone the preview stays at the top while the settings scroll |
 | Image size | Scales the selected image from a tenth to four times its fitted size |
 | Image rotation, Rotate 90° | Turns the selected image to any angle, or a quarter turn clockwise per press. It refits to stay whole inside the label |
 | Image darkness | Left prints the selected image lighter, right darker, the middle leaves it as drawn |

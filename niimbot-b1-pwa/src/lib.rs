@@ -1,6 +1,7 @@
 //! Browser app that composes a label on a canvas and prints it on a Niimbot B1 over Web Serial
 //! or Web Bluetooth.
 
+mod gesture;
 mod label;
 mod saved;
 
@@ -17,6 +18,7 @@ use web_sys::{
     Storage, Url,
 };
 
+use crate::gesture::Pinch;
 use crate::label::{Align, Label, Layer, MAX_DARKNESS, Picture};
 use crate::saved::Saved;
 
@@ -61,6 +63,14 @@ struct DragStart {
     offset: (f64, f64),
 }
 
+#[derive(Debug, Clone, Copy)]
+struct PinchStart {
+    fingers: [(f64, f64); 2],
+    size: u16,
+    rotation: i16,
+    offset: (f64, f64),
+}
+
 #[derive(Debug)]
 struct Page {
     connect_usb: HtmlButtonElement,
@@ -69,6 +79,7 @@ struct Page {
     print: HtmlButtonElement,
     form: HtmlElement,
     status: HtmlElement,
+    sheet: HtmlElement,
     preview: HtmlCanvasElement,
     guide_vertical: HtmlElement,
     guide_horizontal: HtmlElement,
@@ -108,7 +119,9 @@ struct App {
     connection: RefCell<Connection>,
     stack: RefCell<Vec<Layer>>,
     selected: Cell<Option<usize>>,
+    pointers: RefCell<Vec<(i32, (f64, f64))>>,
     drag: Cell<Option<DragStart>>,
+    pinch: Cell<Option<PinchStart>>,
     bitmap: RefCell<Bitmap>,
 }
 
@@ -124,6 +137,7 @@ impl App {
             print: element(&document, "print")?,
             form: element(&document, "label")?,
             status: element(&document, "status")?,
+            sheet: element(&document, "sheet")?,
             preview: element(&document, "preview")?,
             guide_vertical: element(&document, "guide-vertical")?,
             guide_horizontal: element(&document, "guide-horizontal")?,
@@ -168,7 +182,9 @@ impl App {
             connection: RefCell::new(Connection::Disconnected),
             stack: RefCell::new(Vec::new()),
             selected: Cell::new(None),
+            pointers: RefCell::new(Vec::new()),
             drag: Cell::new(None),
+            pinch: Cell::new(None),
             bitmap: RefCell::new(Bitmap::blank(0, 0)),
         })
     }
@@ -211,10 +227,10 @@ impl App {
         on(&page.picture_rotation, "input", app, Self::rotate_picture)?;
         on(&page.turn_picture, "click", app, Self::turn_picture)?;
         on(&page.picture_darkness, "input", app, Self::darken_picture)?;
-        on_pointer(&page.preview, "pointerdown", app, Self::start_drag)?;
-        on_pointer(&page.preview, "pointermove", app, Self::drag_layer)?;
-        on(&page.preview, "pointerup", app, Self::end_drag)?;
-        on(&page.preview, "pointercancel", app, Self::end_drag)?;
+        on_pointer(&page.preview, "pointerdown", app, Self::press)?;
+        on_pointer(&page.preview, "pointermove", app, Self::move_pointer)?;
+        on_pointer(&page.preview, "pointerup", app, Self::release)?;
+        on_pointer(&page.preview, "pointercancel", app, Self::release)?;
         on(&page.connect_usb, "click", app, |app| {
             spawn_local(Rc::clone(app).connect(Link::Usb));
         })?;
@@ -284,6 +300,13 @@ impl App {
                     bitmap.height()
                 )));
                 *self.bitmap.borrow_mut() = bitmap;
+                let ratio =
+                    f64::from(self.page.preview.width()) / f64::from(self.page.preview.height());
+                let _styled = self
+                    .page
+                    .sheet
+                    .style()
+                    .set_property("--ratio", &ratio.to_string());
             }
             Err(error) => self.fail(format!("{error:?}")),
         }
@@ -533,29 +556,127 @@ impl App {
         self.render();
     }
 
-    fn start_drag(self: &Rc<Self>, event: &PointerEvent) {
+    fn press(self: &Rc<Self>, event: &PointerEvent) {
         let point = self.dots_at(event);
-        if let Some(hit) = self
-            .label()
-            .layer_at(&self.canvas, &self.stack.borrow(), point)
-        {
-            self.select_layer(Some(hit));
+        let _captured = self.page.preview.set_pointer_capture(event.pointer_id());
+        self.pointers.borrow_mut().push((event.pointer_id(), point));
+        let fingers = self.pointers.borrow().len();
+        match fingers {
+            1 => {
+                if let Some(hit) = self
+                    .label()
+                    .layer_at(&self.canvas, &self.stack.borrow(), point)
+                {
+                    self.select_layer(Some(hit));
+                }
+                self.start_drag(point);
+            }
+            2 => self.start_pinch(),
+            _ => {}
         }
+    }
+
+    fn move_pointer(self: &Rc<Self>, event: &PointerEvent) {
+        let point = self.dots_at(event);
+        {
+            let mut pointers = self.pointers.borrow_mut();
+            let Some((_, at)) = pointers
+                .iter_mut()
+                .find(|(id, _)| *id == event.pointer_id())
+            else {
+                return;
+            };
+            *at = point;
+        }
+        if self.pinch.get().is_some() {
+            self.apply_pinch();
+        } else {
+            self.drag_layer(point);
+        }
+    }
+
+    fn release(self: &Rc<Self>, event: &PointerEvent) {
+        self.pointers
+            .borrow_mut()
+            .retain(|(id, _)| *id != event.pointer_id());
+        let remaining: Vec<(f64, f64)> = self.pointers.borrow().iter().map(|(_, at)| *at).collect();
+        match remaining.as_slice() {
+            [] => self.end_press(),
+            [point] => {
+                self.pinch.set(None);
+                self.start_drag(*point);
+            }
+            _ => self.start_pinch(),
+        }
+    }
+
+    fn start_drag(&self, point: (f64, f64)) {
         let Some(index) = self.selected.get() else {
             return;
         };
-        let _captured = self.page.preview.set_pointer_capture(event.pointer_id());
         self.drag.set(Some(DragStart {
             pointer: point,
             offset: self.stack.borrow()[index].offset(),
         }));
     }
 
-    fn drag_layer(self: &Rc<Self>, event: &PointerEvent) {
+    fn start_pinch(&self) {
+        let (Some(fingers), Some(index)) = (self.fingers(), self.selected.get()) else {
+            return;
+        };
+        let (size, rotation, offset) = match &self.stack.borrow()[index] {
+            Layer::Picture(picture) => (picture.size, picture.rotation, picture.offset),
+            Layer::Text { offset } => (self.label().font_size, 0, *offset),
+        };
+        self.drag.set(None);
+        self.pinch.set(Some(PinchStart {
+            fingers,
+            size,
+            rotation,
+            offset,
+        }));
+    }
+
+    fn fingers(&self) -> Option<[(f64, f64); 2]> {
+        match self.pointers.borrow().as_slice() {
+            [(_, first), (_, second), ..] => Some([*first, *second]),
+            _ => None,
+        }
+    }
+
+    fn apply_pinch(self: &Rc<Self>) {
+        let (Some(start), Some(fingers), Some(index)) =
+            (self.pinch.get(), self.fingers(), self.selected.get())
+        else {
+            return;
+        };
+        let pinch = Pinch::between(start.fingers, fingers);
+        let text_selected = self.stack.borrow().get(index).is_some_and(Layer::is_text);
+        if text_selected {
+            self.page
+                .font_size
+                .set_value(&pinch.resize(start.size, 6..=400).to_string());
+        } else {
+            self.update_picture(|picture| {
+                picture.size = pinch.resize(start.size, 10..=400);
+                picture.rotation = pinch.rotate(start.rotation);
+            });
+        }
+        self.place(
+            index,
+            (
+                start.offset.0 + pinch.shift.0,
+                start.offset.1 + pinch.shift.1,
+            ),
+        );
+        self.select_layer(Some(index));
+        self.render();
+    }
+
+    fn drag_layer(self: &Rc<Self>, (x, y): (f64, f64)) {
         let (Some(start), Some(index)) = (self.drag.get(), self.selected.get()) else {
             return;
         };
-        let (x, y) = self.dots_at(event);
         self.place(
             index,
             (
@@ -595,8 +716,9 @@ impl App {
         }
     }
 
-    fn end_drag(self: &Rc<Self>) {
+    fn end_press(self: &Rc<Self>) {
         self.drag.set(None);
+        self.pinch.set(None);
         self.page.guide_vertical.set_hidden(true);
         self.page.guide_horizontal.set_hidden(true);
         self.save();
