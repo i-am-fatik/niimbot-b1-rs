@@ -59,7 +59,9 @@ Open `http://localhost:8787` in Chrome or Edge, press Connect USB or Connect Blu
 | Rendering | Sharp thresholds text, Dithered suits photos |
 | Text | Its own layer, on top at first. Press it on the preview or pick Text in the list to select it, drag to move it, Align lines up its rows |
 | Images | Add one or more. The first fills the label, each next one lands at half size in the next quarter, above the other images. Press one on the preview or pick it in the list to select it, drag to move it, Remove deletes it |
-| Layers, Move up, Move down | The list shows the top layer first, the text included. The buttons move the selected image or the text one layer up or down |
+| Layers, Move up, Move down, Center | The list shows the top layer first, the text included. Move up and Move down move the selected image or the text one layer, Center puts it in the middle of the label |
+| Edges | An image's or the text's centre always stays on the label, so part of it stays on the preview to grab. A drag stops at the edge, a smaller or turned label pulls layers back, and a layer lost in an older save comes back on opening |
+| Centre lines | While you drag, an image or the text sticks to the label's vertical and horizontal centre lines within 6 dots, and a guide shows each line it sticks to. The guides never print |
 | Image size | Scales the selected image from a tenth to four times its fitted size |
 | Image rotation, Rotate 90° | Turns the selected image to any angle, or a quarter turn clockwise per press. It refits to stay whole inside the label |
 | Image darkness | Left prints the selected image lighter, right darker, the middle leaves it as drawn |

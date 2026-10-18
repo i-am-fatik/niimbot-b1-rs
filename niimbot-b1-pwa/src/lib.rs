@@ -70,6 +70,8 @@ struct Page {
     form: HtmlElement,
     status: HtmlElement,
     preview: HtmlCanvasElement,
+    guide_vertical: HtmlElement,
+    guide_horizontal: HtmlElement,
     size: HtmlElement,
     width: HtmlInputElement,
     height: HtmlInputElement,
@@ -86,6 +88,7 @@ struct Page {
     layer_list: HtmlSelectElement,
     raise_layer: HtmlButtonElement,
     lower_layer: HtmlButtonElement,
+    centre_layer: HtmlButtonElement,
     picture_size: HtmlInputElement,
     picture_rotation: HtmlInputElement,
     turn_picture: HtmlButtonElement,
@@ -122,6 +125,8 @@ impl App {
             form: element(&document, "label")?,
             status: element(&document, "status")?,
             preview: element(&document, "preview")?,
+            guide_vertical: element(&document, "guide-vertical")?,
+            guide_horizontal: element(&document, "guide-horizontal")?,
             size: element(&document, "size")?,
             width: element(&document, "width")?,
             height: element(&document, "height")?,
@@ -138,6 +143,7 @@ impl App {
             layer_list: element(&document, "layer-list")?,
             raise_layer: element(&document, "raise-layer")?,
             lower_layer: element(&document, "lower-layer")?,
+            centre_layer: element(&document, "centre-layer")?,
             picture_size: element(&document, "picture-size")?,
             picture_rotation: element(&document, "picture-rotation")?,
             turn_picture: element(&document, "turn-picture")?,
@@ -182,7 +188,10 @@ impl App {
             &page.raster,
         ];
         for field in label_fields {
-            on(field, "input", app, Self::render)?;
+            on(field, "input", app, |app| {
+                app.confine_layers();
+                app.render();
+            })?;
         }
         on(&page.add_picture, "change", app, |app| {
             spawn_local(Rc::clone(app).add_pictures());
@@ -196,6 +205,7 @@ impl App {
         })?;
         on(&page.raise_layer, "click", app, |app| app.restack(1))?;
         on(&page.lower_layer, "click", app, |app| app.restack(-1))?;
+        on(&page.centre_layer, "click", app, Self::centre_layer)?;
         on(&page.form, "input", app, Self::save)?;
         on(&page.picture_size, "input", app, Self::resize_picture)?;
         on(&page.picture_rotation, "input", app, Self::rotate_picture)?;
@@ -347,6 +357,7 @@ impl App {
                 .iter()
                 .position(|layer| layer.id() == id)
         });
+        self.confine_layers();
         self.list_layers();
         self.select_layer(selected);
         self.render();
@@ -408,6 +419,19 @@ impl App {
         self.save();
     }
 
+    fn centre_layer(self: &Rc<Self>) {
+        let Some(index) = self.selected.get() else {
+            return;
+        };
+        let label = self.label();
+        if let Some(layer) = self.stack.borrow_mut().get_mut(index) {
+            let centred = label.centred_offset(&self.canvas, layer);
+            *layer.offset_mut() = centred;
+        }
+        self.render();
+        self.save();
+    }
+
     fn remove_picture(self: &Rc<Self>) {
         let Some(index) = self.selected.get() else {
             return;
@@ -459,6 +483,7 @@ impl App {
             .set_disabled(index.is_none_or(|index| index + 1 >= stack.len()));
         page.lower_layer
             .set_disabled(index.is_none_or(|index| index == 0));
+        page.centre_layer.set_disabled(index.is_none());
         page.picture_size.set_disabled(picture.is_none());
         page.picture_size
             .set_value(&picture.map_or(100, |picture| picture.size).to_string());
@@ -531,17 +556,49 @@ impl App {
             return;
         };
         let (x, y) = self.dots_at(event);
-        if let Some(layer) = self.stack.borrow_mut().get_mut(index) {
-            *layer.offset_mut() = (
+        self.place(
+            index,
+            (
                 start.offset.0 + x - start.pointer.0,
                 start.offset.1 + y - start.pointer.1,
-            );
-        }
+            ),
+        );
         self.render();
+    }
+
+    fn place(&self, index: usize, moved: (f64, f64)) {
+        let label = self.label();
+        let Some(placed) = self
+            .stack
+            .borrow()
+            .get(index)
+            .map(|layer| label.place(&self.canvas, layer, moved))
+        else {
+            return;
+        };
+        self.page
+            .guide_vertical
+            .set_hidden(!placed.on_vertical_line);
+        self.page
+            .guide_horizontal
+            .set_hidden(!placed.on_horizontal_line);
+        if let Some(layer) = self.stack.borrow_mut().get_mut(index) {
+            *layer.offset_mut() = placed.offset;
+        }
+    }
+
+    fn confine_layers(&self) {
+        let label = self.label();
+        for layer in self.stack.borrow_mut().iter_mut() {
+            let offset = label.confine(&self.canvas, layer, layer.offset());
+            *layer.offset_mut() = offset;
+        }
     }
 
     fn end_drag(self: &Rc<Self>) {
         self.drag.set(None);
+        self.page.guide_vertical.set_hidden(true);
+        self.page.guide_horizontal.set_hidden(true);
         self.save();
     }
 

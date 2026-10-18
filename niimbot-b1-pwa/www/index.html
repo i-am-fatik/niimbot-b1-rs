@@ -113,6 +113,10 @@ label.button:hover { background: color-mix(in srgb, var(--accent) 10%, var(--pan
 .layer-buttons { display: grid; gap: 8px; align-content: start; }
 .rotation { display: flex; gap: 8px; align-items: end; }
 .rotation label { flex: 1; }
+.sheet { position: relative; width: 100%; max-width: 576px; }
+.guide { position: absolute; background: var(--accent); pointer-events: none; }
+.guide.vertical { top: 0; bottom: 0; left: calc(50% - 1px); width: 2px; }
+.guide.horizontal { left: 0; right: 0; top: calc(50% - 1px); height: 2px; }
 #preview.movable { cursor: grab; touch-action: none; }
 #preview.movable:active { cursor: grabbing; }
 #print { width: 100%; padding: 12px; }
@@ -128,7 +132,11 @@ label.button:hover { background: color-mix(in srgb, var(--accent) 10%, var(--pan
 </header>
 <main>
   <section class="preview" aria-label="Print preview">
-    <canvas id="preview" class="movable" width="384" height="240"></canvas>
+    <div class="sheet">
+      <canvas id="preview" class="movable" width="384" height="240"></canvas>
+      <div id="guide-vertical" class="guide vertical" hidden></div>
+      <div id="guide-horizontal" class="guide horizontal" hidden></div>
+    </div>
     <p id="size"></p>
   </section>
   <form id="label" autocomplete="off">
@@ -183,6 +191,7 @@ B1</textarea></label>
         <div class="layer-buttons">
           <button id="raise-layer" type="button" disabled>Move up</button>
           <button id="lower-layer" type="button" disabled>Move down</button>
+          <button id="centre-layer" type="button" disabled>Center</button>
         </div>
       </div>
       <label>Image size <input id="picture-size" type="range" min="10" max="400" value="100" disabled></label>

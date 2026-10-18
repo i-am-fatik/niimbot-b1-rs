@@ -11,6 +11,7 @@ pub(crate) const MAX_DARKNESS: i8 = 10;
 const MAX_GAMMA: f64 = 4.0;
 const QUARTERS: [(f64, f64); 4] = [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)];
 const TEXT_ID: &str = "text";
+const SNAP_DOTS: f64 = 6.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Align {
@@ -34,6 +35,13 @@ pub(crate) struct Picture {
 pub(crate) enum Layer {
     Text { offset: (f64, f64) },
     Picture(Picture),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Placed {
+    pub(crate) offset: (f64, f64),
+    pub(crate) on_vertical_line: bool,
+    pub(crate) on_horizontal_line: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -227,6 +235,56 @@ impl Label {
         })
     }
 
+    pub(crate) fn confine(
+        &self,
+        canvas: &HtmlCanvasElement,
+        layer: &Layer,
+        offset: (f64, f64),
+    ) -> (f64, f64) {
+        let label = self.upright_size();
+        confined(offset, self.rest_centre(canvas, layer, label), label)
+    }
+
+    pub(crate) fn place(
+        &self,
+        canvas: &HtmlCanvasElement,
+        layer: &Layer,
+        offset: (f64, f64),
+    ) -> Placed {
+        let label = self.upright_size();
+        let rest = self.rest_centre(canvas, layer, label);
+        let (x, y) = confined(offset, rest, label);
+        let centred = offset_to_centre(rest, label);
+        let snap =
+            |offset: f64, centred: f64| ((offset - centred).abs() <= SNAP_DOTS).then_some(centred);
+        let (snapped_x, snapped_y) = (snap(x, centred.0), snap(y, centred.1));
+        Placed {
+            offset: (snapped_x.unwrap_or(x), snapped_y.unwrap_or(y)),
+            on_vertical_line: snapped_x.is_some(),
+            on_horizontal_line: snapped_y.is_some(),
+        }
+    }
+
+    pub(crate) fn centred_offset(&self, canvas: &HtmlCanvasElement, layer: &Layer) -> (f64, f64) {
+        let label = self.upright_size();
+        offset_to_centre(self.rest_centre(canvas, layer, label), label)
+    }
+
+    fn rest_centre(
+        &self,
+        canvas: &HtmlCanvasElement,
+        layer: &Layer,
+        label: (f64, f64),
+    ) -> (f64, f64) {
+        let middle = (label.0 / 2.0, label.1 / 2.0);
+        match layer {
+            Layer::Picture(_) => middle,
+            Layer::Text { .. } => context(canvas)
+                .and_then(|context| self.text_frame(&context, label, (0.0, 0.0)))
+                .map_or(middle, |frame| frame.centre),
+        }
+    }
+
     pub(crate) fn rasterize(
         &self,
         canvas: &HtmlCanvasElement,
@@ -362,6 +420,17 @@ impl Label {
         let image = ImageData::new_with_u8_clamped_array_and_sh(Clamped(&rgba), width, height)?;
         context(preview)?.put_image_data(&image, 0, 0)
     }
+}
+
+fn offset_to_centre(rest: (f64, f64), (width, height): (f64, f64)) -> (f64, f64) {
+    (width / 2.0 - rest.0, height / 2.0 - rest.1)
+}
+
+fn confined((x, y): (f64, f64), rest: (f64, f64), (width, height): (f64, f64)) -> (f64, f64) {
+    (
+        (rest.0 + x).clamp(0.0, width) - rest.0,
+        (rest.1 + y).clamp(0.0, height) - rest.1,
+    )
 }
 
 fn turn_clockwise(rgba: &[u8], width: usize, height: usize) -> Vec<u8> {
