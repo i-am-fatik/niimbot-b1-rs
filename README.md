@@ -41,7 +41,7 @@ curl -fsSL -o firmware/B1_6.19_density_coeff.bin https://raw.githubusercontent.c
 ./target/release/niimbot-b1 build-firmware --dir firmware
 ```
 
-Writes `firmware/B1_6.19_density_align7.bin`, MD5 `540ef521d7416cfe1eb561b6effcb0b4`, only when both inputs are the expected firmware. What the patch does, how to flash it and how to roll back is in [firmware/README.md](https://github.com/vkolarik/niimbot-b1/blob/main/firmware/README.md). Flashing can brick the printer and voids the warranty.
+Writes `firmware/B1_6.19_density_align7.bin`, MD5 `540ef521d7416cfe1eb561b6effcb0b4`, only when both inputs are the expected firmware. Next to it goes `firmware/B1_6.19_density_align7_nolock.bin`, MD5 `6fd1612be6fb0cfb0ffb27808df3c44c`, the same image that never refuses a tagged roll with error `0x14`, so a used up, cloned or unwritable tag still prints at full darkness. What the patch does, how to flash it and how to roll back is in [firmware/README.md](https://github.com/vkolarik/niimbot-b1/blob/main/firmware/README.md). Flashing can brick the printer and voids the warranty.
 
 ## Web app
 

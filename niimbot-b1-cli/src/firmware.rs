@@ -9,9 +9,11 @@ const STOCK: &str = "B1_6.19_stock.bin";
 const DENSITY_COEFF: &str = "B1_6.19_density_coeff.bin";
 const ALIGN3: &str = "B1_6.19_density_align3.bin";
 const ALIGN7: &str = "B1_6.19_density_align7.bin";
+const NOLOCK: &str = "B1_6.19_density_align7_nolock.bin";
 const IMAGE_LEN: usize = 124_436;
 const ALIGN3_MD5: &str = "78dcde4bd7a4a21dfb965b40d7607cc0";
 const ALIGN7_MD5: &str = "540ef521d7416cfe1eb561b6effcb0b4";
+const NOLOCK_MD5: &str = "6fd1612be6fb0cfb0ffb27808df3c44c";
 
 const BASE: u32 = 0x0101_0000;
 
@@ -53,6 +55,14 @@ const HEAT_MULTIPLY_CALLS: [u32; 18] = [
     0x0101_69F6,
     0x0101_6A20,
 ];
+const ROLL_REJECTS: [(u32, [u8; 2], [u8; 2]); 4] = [
+    (0x0102_4E8A, MOVS_R3_1, MOVS_R3_0),
+    (0x0102_4EC8, MOVS_R2_1, MOVS_R2_0),
+    (0x0102_5012, MOVS_R2_1, MOVS_R2_0),
+    (0x0102_59BA, MOVS_R2_1, MOVS_R2_0),
+];
+const OVERUSE_DOWNGRADES: [(u32, [u8; 2]); 2] =
+    [(0x0101_6126, [0x01, 0xD8]), (0x0101_DB42, [0x0C, 0xD8])];
 
 const BNE_ALIGN_SKIP: [u8; 2] = [0x1C, 0xD1];
 const NOP: [u8; 2] = [0x00, 0xBF];
@@ -61,6 +71,10 @@ const PUSH_R2_LR: [u8; 2] = [0x04, 0xB5];
 const POP_PC: [u8; 2] = [0x00, 0xBD];
 const POP_R2_PC: [u8; 2] = [0x04, 0xBD];
 const MOVS_R0_1: [u8; 2] = [0x01, 0x20];
+const MOVS_R2_0: [u8; 2] = [0x00, 0x22];
+const MOVS_R2_1: [u8; 2] = [0x01, 0x22];
+const MOVS_R3_0: [u8; 2] = [0x00, 0x23];
+const MOVS_R3_1: [u8; 2] = [0x01, 0x23];
 const LDR_R1_PC_4: [u8; 2] = [0x01, 0x49];
 const LDR_R1_PC_12: [u8; 2] = [0x03, 0x49];
 const LDR_R2_PC_16: [u8; 2] = [0x04, 0x4A];
@@ -80,11 +94,25 @@ pub(crate) fn build(dir: &Path, keep_align3: bool) -> anyhow::Result<()> {
 
     heat_by_tag(&mut image, &stock)?;
     check_stage("align7", &image, ALIGN7_MD5)?;
+    let mut nolock = image.clone();
+    never_reject_roll(&mut nolock)?;
+    check_stage("nolock", &nolock, NOLOCK_MD5)?;
 
     if keep_align3 {
         write_output(dir, ALIGN3, &align3)?;
     }
-    write_output(dir, ALIGN7, &image)
+    write_output(dir, ALIGN7, &image)?;
+    write_output(dir, NOLOCK, &nolock)
+}
+
+fn never_reject_roll(image: &mut [u8]) -> anyhow::Result<()> {
+    for (address, flag_set, no_flag) in ROLL_REJECTS {
+        replace(image, address, &flag_set, &no_flag)?;
+    }
+    for (address, branch) in OVERUSE_DOWNGRADES {
+        replace(image, address, &branch, &NOP)?;
+    }
+    Ok(())
 }
 
 fn seek_gap_without_tag(image: &mut [u8]) -> anyhow::Result<()> {

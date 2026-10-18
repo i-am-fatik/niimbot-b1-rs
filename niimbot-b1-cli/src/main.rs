@@ -42,7 +42,9 @@ struct Cli {
 enum Command {
     #[command(flatten)]
     Printer(PrinterCommand),
-    #[command(about = "Build B1_6.19_density_align7.bin from the stock and community firmware")]
+    #[command(
+        about = "Build B1_6.19_density_align7.bin and its _nolock variant from the stock and community firmware"
+    )]
     BuildFirmware(FirmwareArgs),
 }
 
