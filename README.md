@@ -50,13 +50,15 @@ wasm-pack build niimbot-b1-pwa --release --target web --out-dir www/pkg --no-typ
 python3 -m http.server 8787 -d niimbot-b1-pwa/www
 ```
 
-Open `http://localhost:8787` in Chrome or Edge, press Connect USB or Connect Bluetooth, pick the printer, press Print. Web Serial and Web Bluetooth only run on `https` or `localhost`. After the first visit the app installs from the address bar and opens offline. To use it on other machines, serve `niimbot-b1-pwa/www` from any static `https` host.
+Open `http://localhost:8787` in Chrome or Edge, press Connect USB or Connect Bluetooth, pick the printer, press Print. Web Serial and Web Bluetooth only run on `https` or `localhost`. After the first visit the app installs from the address bar and opens offline. The label, its settings and its images save themselves in the browser as you edit and come back after a reload, on that browser only. To use it on other machines, serve `niimbot-b1-pwa/www` from any static `https` host.
 
 | Field | Meaning |
 |---|---|
 | Width, Height mm | Label size at 8 dots per mm, width capped at the 48 mm head |
 | Rendering | Sharp thresholds text, Dithered suits photos |
-| Image | Drawn under the text, scaled to fit the label |
+| Darkness | Left prints lighter, right darker, the middle leaves the label as drawn |
+| Images | Add one or more, drawn under the text in the order added. Press one on the preview or pick it in the list to select it, drag to move it, Remove deletes it |
+| Image size | Scales the selected image from a tenth to four times its fitted size |
 | Density, Copies, Media | Same as the CLI options |
 
 ## Library
@@ -78,9 +80,9 @@ API docs: `cargo doc -p niimbot-b1 --features serial,ble --open`. The wire proto
 
 ```sh
 cargo fmt --all --check
-cargo clippy --workspace --all-targets --exclude niimbot-b1-pwa
+cargo clippy --workspace --all-targets
 cargo clippy -p niimbot-b1-pwa --target wasm32-unknown-unknown
-cargo test --workspace --exclude niimbot-b1-pwa
+cargo test --workspace
 ```
 
 ## Credits

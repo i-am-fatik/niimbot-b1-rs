@@ -100,8 +100,11 @@ input, select, textarea {
   width: 100%;
 }
 input[type="checkbox"] { width: auto; accent-color: var(--accent); }
+input[type="range"] { padding: 0; border: 0; background: none; accent-color: var(--accent); }
 textarea { resize: vertical; }
 .picture { display: flex; gap: 8px; align-items: center; }
+#preview.movable { cursor: grab; touch-action: none; }
+#preview.movable:active { cursor: grabbing; }
 #print { width: 100%; padding: 12px; }
 </style>
 </head>
@@ -152,14 +155,17 @@ B1</textarea></label>
           </select>
         </label>
       </div>
+      <label>Darkness <input id="darkness" type="range" min="-10" max="10" value="0"></label>
       <label class="check"><input id="bold" type="checkbox" checked> Bold</label>
       <label class="check"><input id="border" type="checkbox"> Border</label>
-      <label>Image
+      <label>Images
         <span class="picture">
-          <input id="picture" type="file" accept="image/*">
-          <button id="clear-picture" type="button">Remove</button>
+          <input id="add-picture" type="file" accept="image/*" multiple>
+          <button id="remove-picture" type="button" disabled>Remove</button>
         </span>
       </label>
+      <select id="picture-list" size="3" aria-label="Images on the label" hidden></select>
+      <label>Image size <input id="picture-size" type="range" min="10" max="400" value="100" disabled></label>
     </fieldset>
     <fieldset>
       <legend>Print</legend>

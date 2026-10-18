@@ -2,20 +2,23 @@
 //! or Web Bluetooth.
 
 mod label;
+mod saved;
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::fmt::Display;
 use std::rc::Rc;
 
 use niimbot_b1::{Bitmap, Error, LabelType, PrintOptions, Printer, Raster, WebTransport};
 use wasm_bindgen::prelude::*;
-use wasm_bindgen_futures::spawn_local;
+use wasm_bindgen_futures::{JsFuture, spawn_local};
 use web_sys::{
-    Document, HtmlButtonElement, HtmlCanvasElement, HtmlElement, HtmlImageElement,
-    HtmlInputElement, HtmlSelectElement, HtmlTextAreaElement, Url,
+    Blob, Document, HtmlButtonElement, HtmlCanvasElement, HtmlElement, HtmlImageElement,
+    HtmlInputElement, HtmlOptionElement, HtmlSelectElement, HtmlTextAreaElement, PointerEvent,
+    Storage, Url,
 };
 
-use crate::label::{Align, Label};
+use crate::label::{Align, Label, MAX_DARKNESS, Picture};
+use crate::saved::Saved;
 
 const NO_SERIAL: &str = "This browser has no Web Serial. Use Chrome or Edge on a desktop.";
 const NO_BLUETOOTH: &str = "This browser has no Web Bluetooth. Use Chrome or Edge.";
@@ -29,8 +32,11 @@ const NO_BLUETOOTH: &str = "This browser has no Web Bluetooth. Use Chrome or Edg
 pub fn start() -> Result<(), JsValue> {
     let app = Rc::new(App::new()?);
     App::wire(&app)?;
+    let saved = app.storage.as_ref().map(Saved::read).unwrap_or_default();
+    saved.restore_fields(&app.document);
     app.render();
     app.sync_controls();
+    spawn_local(Rc::clone(&app).restore_pictures(saved));
     register_service_worker();
     Ok(())
 }
@@ -48,12 +54,19 @@ enum Connection {
     Ready(Printer<WebTransport>),
 }
 
+#[derive(Debug, Clone, Copy)]
+struct Drag {
+    pointer_start: (f64, f64),
+    offset_start: (f64, f64),
+}
+
 #[derive(Debug)]
 struct Page {
     connect_usb: HtmlButtonElement,
     connect_bluetooth: HtmlButtonElement,
     disconnect: HtmlButtonElement,
     print: HtmlButtonElement,
+    form: HtmlElement,
     status: HtmlElement,
     preview: HtmlCanvasElement,
     size: HtmlElement,
@@ -65,9 +78,12 @@ struct Page {
     bold: HtmlInputElement,
     align: HtmlSelectElement,
     border: HtmlInputElement,
-    picture: HtmlInputElement,
-    clear_picture: HtmlButtonElement,
+    add_picture: HtmlInputElement,
+    remove_picture: HtmlButtonElement,
+    picture_list: HtmlSelectElement,
+    picture_size: HtmlInputElement,
     raster: HtmlSelectElement,
+    darkness: HtmlInputElement,
     density: HtmlSelectElement,
     copies: HtmlInputElement,
     label_type: HtmlSelectElement,
@@ -76,9 +92,13 @@ struct Page {
 #[derive(Debug)]
 struct App {
     page: Page,
+    document: Document,
+    storage: Option<Storage>,
     canvas: HtmlCanvasElement,
     connection: RefCell<Connection>,
-    picture: RefCell<Option<HtmlImageElement>>,
+    pictures: RefCell<Vec<Picture>>,
+    selected: Cell<Option<usize>>,
+    drag: Cell<Option<Drag>>,
     bitmap: RefCell<Bitmap>,
 }
 
@@ -92,6 +112,7 @@ impl App {
             connect_bluetooth: element(&document, "connect-bluetooth")?,
             disconnect: element(&document, "disconnect")?,
             print: element(&document, "print")?,
+            form: element(&document, "label")?,
             status: element(&document, "status")?,
             preview: element(&document, "preview")?,
             size: element(&document, "size")?,
@@ -103,26 +124,39 @@ impl App {
             bold: element(&document, "bold")?,
             align: element(&document, "align")?,
             border: element(&document, "border")?,
-            picture: element(&document, "picture")?,
-            clear_picture: element(&document, "clear-picture")?,
+            add_picture: element(&document, "add-picture")?,
+            remove_picture: element(&document, "remove-picture")?,
+            picture_list: element(&document, "picture-list")?,
+            picture_size: element(&document, "picture-size")?,
             raster: element(&document, "raster")?,
+            darkness: element(&document, "darkness")?,
             density: element(&document, "density")?,
             copies: element(&document, "copies")?,
             label_type: element(&document, "label-type")?,
         };
         let canvas = document.create_element("canvas")?.dyn_into()?;
+        let storage = web_sys::window().and_then(|window| window.local_storage().ok().flatten());
+        if storage.is_none() {
+            web_sys::console::warn_1(
+                &"This browser blocks storage, so the label is not saved".into(),
+            );
+        }
         Ok(Self {
             page,
+            document,
+            storage,
             canvas,
             connection: RefCell::new(Connection::Disconnected),
-            picture: RefCell::new(None),
+            pictures: RefCell::new(Vec::new()),
+            selected: Cell::new(None),
+            drag: Cell::new(None),
             bitmap: RefCell::new(Bitmap::blank(0, 0)),
         })
     }
 
     fn wire(app: &Rc<Self>) -> Result<(), JsValue> {
         let page = &app.page;
-        let label_fields: [&HtmlElement; 9] = [
+        let label_fields: [&HtmlElement; 10] = [
             &page.width,
             &page.height,
             &page.text,
@@ -132,12 +166,25 @@ impl App {
             &page.align,
             &page.border,
             &page.raster,
+            &page.darkness,
         ];
         for field in label_fields {
             on(field, "input", app, Self::render)?;
         }
-        on(&page.picture, "change", app, Self::load_picture)?;
-        on(&page.clear_picture, "click", app, Self::clear_picture)?;
+        on(&page.add_picture, "change", app, |app| {
+            spawn_local(Rc::clone(app).add_pictures());
+        })?;
+        on(&page.remove_picture, "click", app, Self::remove_picture)?;
+        on(&page.picture_list, "change", app, |app| {
+            app.select_picture(usize::try_from(app.page.picture_list.selected_index()).ok());
+            app.save();
+        })?;
+        on(&page.form, "input", app, Self::save)?;
+        on(&page.picture_size, "input", app, Self::resize_picture)?;
+        on_pointer(&page.preview, "pointerdown", app, Self::start_drag)?;
+        on_pointer(&page.preview, "pointermove", app, Self::drag_picture)?;
+        on(&page.preview, "pointerup", app, Self::end_drag)?;
+        on(&page.preview, "pointercancel", app, Self::end_drag)?;
         on(&page.connect_usb, "click", app, |app| {
             spawn_local(Rc::clone(app).connect(Link::Usb));
         })?;
@@ -179,6 +226,7 @@ impl App {
             } else {
                 Raster::Threshold
             },
+            darkness: parse(&page.darkness.value(), 0).clamp(-MAX_DARKNESS, MAX_DARKNESS),
         }
     }
 
@@ -194,7 +242,7 @@ impl App {
     fn render(self: &Rc<Self>) {
         let label = self.label();
         let rendered = label
-            .rasterize(&self.canvas, self.picture.borrow().as_ref())
+            .rasterize(&self.canvas, &self.pictures.borrow())
             .and_then(|bitmap| label::show(&bitmap, &self.page.preview).map(|()| bitmap));
         match rendered {
             Ok(bitmap) => {
@@ -211,34 +259,170 @@ impl App {
         }
     }
 
-    fn load_picture(self: &Rc<Self>) {
-        let Some(file) = self.page.picture.files().and_then(|files| files.get(0)) else {
+    async fn add_pictures(self: Rc<Self>) {
+        let Some(files) = self.page.add_picture.files() else {
             return;
         };
-        let loaded = Url::create_object_url_with_blob(&file).and_then(|url| {
-            let picture = HtmlImageElement::new()?;
-            let onload = Closure::once({
-                let (app, picture, url) = (Rc::clone(self), picture.clone(), url.clone());
-                move || {
-                    let _revoked = Url::revoke_object_url(&url);
-                    *app.picture.borrow_mut() = Some(picture);
-                    app.render();
-                }
+        let files: Vec<_> = (0..files.length())
+            .filter_map(|index| files.get(index))
+            .collect();
+        self.page.add_picture.set_value("");
+        for file in files {
+            let Ok(image) = decode(&file).await else {
+                self.fail(format!(
+                    "{} is not an image this browser can open",
+                    file.name()
+                ));
+                continue;
+            };
+            let picture = Picture::new(random_id(), file.name(), image);
+            if self.storage.is_some()
+                && let Err(error) = saved::store_file(&picture.id, &file).await
+            {
+                web_sys::console::warn_1(&error);
+            }
+            self.add_picture(picture);
+        }
+        self.save();
+    }
+
+    async fn restore_pictures(self: Rc<Self>, saved: Saved) {
+        for picture in saved.pictures {
+            let Ok(file) = saved::load_file(&picture.id).await else {
+                continue;
+            };
+            let Ok(image) = decode(&file).await else {
+                continue;
+            };
+            self.add_picture(Picture {
+                id: picture.id,
+                name: picture.name,
+                image,
+                size: picture.size,
+                offset: picture.offset,
             });
-            picture.set_onload(Some(onload.as_ref().unchecked_ref()));
-            onload.forget();
-            picture.set_src(&url);
-            Ok(())
+        }
+        let selected = saved.selected.and_then(|id| {
+            self.pictures
+                .borrow()
+                .iter()
+                .position(|picture| picture.id == id)
         });
-        if let Err(error) = loaded {
-            self.fail(format!("{error:?}"));
+        self.select_picture(selected);
+    }
+
+    fn save(self: &Rc<Self>) {
+        let Some(storage) = &self.storage else {
+            return;
+        };
+        let saved = Saved::capture(&self.document, &self.pictures.borrow(), self.selected.get());
+        if let Err(error) = saved.write(storage) {
+            web_sys::console::warn_1(&error);
         }
     }
 
-    fn clear_picture(self: &Rc<Self>) {
-        self.page.picture.set_value("");
-        *self.picture.borrow_mut() = None;
+    fn add_picture(self: &Rc<Self>, picture: Picture) {
+        let listed = HtmlOptionElement::new_with_text(&picture.name)
+            .and_then(|option| self.page.picture_list.add_with_html_option_element(&option));
+        if let Err(error) = listed {
+            self.fail(format!("{error:?}"));
+            return;
+        }
+        self.pictures.borrow_mut().push(picture);
+        self.select_picture(self.pictures.borrow().len().checked_sub(1));
         self.render();
+    }
+
+    fn remove_picture(self: &Rc<Self>) {
+        let Some(index) = self.selected.get() else {
+            return;
+        };
+        let removed = self.pictures.borrow_mut().remove(index);
+        self.page
+            .picture_list
+            .remove_with_index(list_index(Some(index)));
+        self.select_picture(self.pictures.borrow().len().checked_sub(1));
+        self.render();
+        self.save();
+        if self.storage.is_some() {
+            spawn_local(async move {
+                if let Err(error) = saved::delete_file(&removed.id).await {
+                    web_sys::console::warn_1(&error);
+                }
+            });
+        }
+    }
+
+    fn select_picture(&self, index: Option<usize>) {
+        self.selected.set(index);
+        let pictures = self.pictures.borrow();
+        let selected = index.and_then(|index| pictures.get(index));
+        let page = &self.page;
+        page.picture_list.set_hidden(pictures.is_empty());
+        page.picture_list.set_selected_index(list_index(index));
+        page.picture_size.set_disabled(selected.is_none());
+        page.picture_size
+            .set_value(&selected.map_or(100, |picture| picture.size).to_string());
+        page.remove_picture.set_disabled(selected.is_none());
+        page.preview
+            .set_class_name(if pictures.is_empty() { "" } else { "movable" });
+    }
+
+    fn update_selected(&self, update: impl FnOnce(&mut Picture)) {
+        if let Some(index) = self.selected.get()
+            && let Some(picture) = self.pictures.borrow_mut().get_mut(index)
+        {
+            update(picture);
+        }
+    }
+
+    fn resize_picture(self: &Rc<Self>) {
+        let size = parse(&self.page.picture_size.value(), 100).clamp(10, 400);
+        self.update_selected(|picture| picture.size = size);
+        self.render();
+    }
+
+    fn start_drag(self: &Rc<Self>, event: &PointerEvent) {
+        let point = self.dots_at(event);
+        if let Some(hit) = self.label().picture_at(&self.pictures.borrow(), point) {
+            self.select_picture(Some(hit));
+        }
+        let Some(index) = self.selected.get() else {
+            return;
+        };
+        let _captured = self.page.preview.set_pointer_capture(event.pointer_id());
+        self.drag.set(Some(Drag {
+            pointer_start: point,
+            offset_start: self.pictures.borrow()[index].offset,
+        }));
+    }
+
+    fn drag_picture(self: &Rc<Self>, event: &PointerEvent) {
+        let Some(drag) = self.drag.get() else {
+            return;
+        };
+        let (x, y) = self.dots_at(event);
+        let offset = (
+            drag.offset_start.0 + x - drag.pointer_start.0,
+            drag.offset_start.1 + y - drag.pointer_start.1,
+        );
+        self.update_selected(|picture| picture.offset = offset);
+        self.render();
+    }
+
+    fn end_drag(self: &Rc<Self>) {
+        self.drag.set(None);
+        self.save();
+    }
+
+    fn dots_at(&self, event: &PointerEvent) -> (f64, f64) {
+        let preview = &self.page.preview;
+        let bounds = preview.get_bounding_client_rect();
+        let dots_per_pixel = f64::from(preview.width()) / bounds.width();
+        (
+            (event.client_x() - bounds.left()) * dots_per_pixel,
+            (event.client_y() - bounds.top()) * dots_per_pixel,
+        )
     }
 
     async fn connect(self: Rc<Self>, link: Link) {
@@ -401,6 +585,39 @@ fn on(
     target.add_event_listener_with_callback(event, listener.as_ref().unchecked_ref())?;
     listener.forget();
     Ok(())
+}
+
+fn on_pointer(
+    target: &HtmlElement,
+    event: &str,
+    app: &Rc<App>,
+    handler: impl Fn(&Rc<App>, &PointerEvent) + 'static,
+) -> Result<(), JsValue> {
+    let app = Rc::clone(app);
+    let listener =
+        Closure::<dyn Fn(PointerEvent)>::new(move |event: PointerEvent| handler(&app, &event));
+    target.add_event_listener_with_callback(event, listener.as_ref().unchecked_ref())?;
+    listener.forget();
+    Ok(())
+}
+
+async fn decode(blob: &Blob) -> Result<HtmlImageElement, JsValue> {
+    let url = Url::create_object_url_with_blob(blob)?;
+    let image = HtmlImageElement::new()?;
+    image.set_src(&url);
+    let decoded = JsFuture::from(image.decode()).await;
+    Url::revoke_object_url(&url)?;
+    decoded.map(|_| image)
+}
+
+fn random_id() -> String {
+    js_sys::Math::random().to_string()
+}
+
+fn list_index(index: Option<usize>) -> i32 {
+    index
+        .and_then(|index| i32::try_from(index).ok())
+        .unwrap_or(-1)
 }
 
 fn element<T: JsCast>(document: &Document, id: &str) -> Result<T, JsValue> {

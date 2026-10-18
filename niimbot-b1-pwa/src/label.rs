@@ -7,12 +7,58 @@ const DOTS_PER_MM: u32 = 8;
 const MARGIN: f64 = 8.0;
 const BORDER_WIDTH: f64 = 3.0;
 const LINE_SPACING: f64 = 1.15;
+pub(crate) const MAX_DARKNESS: i8 = 10;
+const MAX_GAMMA: f64 = 4.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Align {
     Left,
     Center,
     Right,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct Picture {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) image: HtmlImageElement,
+    pub(crate) size: u16,
+    pub(crate) offset: (f64, f64),
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Frame {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+}
+
+impl Picture {
+    pub(crate) fn new(id: String, name: String, image: HtmlImageElement) -> Self {
+        Self {
+            id,
+            name,
+            image,
+            size: 100,
+            offset: (0.0, 0.0),
+        }
+    }
+
+    fn frame(&self, label_width: f64, label_height: f64) -> Frame {
+        let natural_width = f64::from(self.image.natural_width());
+        let natural_height = f64::from(self.image.natural_height());
+        let scale = (label_width / natural_width).min(label_height / natural_height)
+            * f64::from(self.size)
+            / 100.0;
+        let (width, height) = (natural_width * scale, natural_height * scale);
+        Frame {
+            x: (label_width - width) / 2.0 + self.offset.0,
+            y: (label_height - height) / 2.0 + self.offset.1,
+            width,
+            height,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -26,6 +72,7 @@ pub(crate) struct Label {
     pub(crate) align: Align,
     pub(crate) border: bool,
     pub(crate) raster: Raster,
+    pub(crate) darkness: i8,
 }
 
 impl Label {
@@ -38,10 +85,19 @@ impl Label {
         u32::from(self.height_mm) * DOTS_PER_MM
     }
 
+    pub(crate) fn picture_at(&self, pictures: &[Picture], (x, y): (f64, f64)) -> Option<usize> {
+        let (width, height) = (f64::from(self.width()), f64::from(self.height()));
+        pictures.iter().rposition(|picture| {
+            let frame = picture.frame(width, height);
+            (frame.x..frame.x + frame.width).contains(&x)
+                && (frame.y..frame.y + frame.height).contains(&y)
+        })
+    }
+
     pub(crate) fn rasterize(
         &self,
         canvas: &HtmlCanvasElement,
-        picture: Option<&HtmlImageElement>,
+        pictures: &[Picture],
     ) -> Result<Bitmap, JsValue> {
         let (width, height) = (self.width(), self.height());
         canvas.set_width(width);
@@ -51,19 +107,17 @@ impl Label {
 
         context.set_fill_style_str("#fff");
         context.fill_rect(0.0, 0.0, w, h);
-        if let Some(picture) = picture.filter(|picture| picture.natural_width() > 0) {
-            let (pw, ph) = (
-                f64::from(picture.natural_width()),
-                f64::from(picture.natural_height()),
-            );
-            let scale = (w / pw).min(h / ph);
-            let (dw, dh) = (pw * scale, ph * scale);
+        for picture in pictures
+            .iter()
+            .filter(|picture| picture.image.natural_width() > 0)
+        {
+            let frame = picture.frame(w, h);
             context.draw_image_with_html_image_element_and_dw_and_dh(
-                picture,
-                (w - dw) / 2.0,
-                (h - dh) / 2.0,
-                dw,
-                dh,
+                &picture.image,
+                frame.x,
+                frame.y,
+                frame.width,
+                frame.height,
             )?;
         }
 
@@ -105,9 +159,11 @@ impl Label {
             context.stroke_rect(inset, inset, w - BORDER_WIDTH, h - BORDER_WIDTH);
         }
 
-        let pixels = context
+        let mut pixels = context
             .get_image_data(0, 0, signed(width), signed(height))?
-            .data();
+            .data()
+            .0;
+        darken(&mut pixels, self.darkness);
         Ok(Bitmap::from_rgba(
             dots(width),
             dots(height),
@@ -146,6 +202,23 @@ fn context(canvas: &HtmlCanvasElement) -> Result<CanvasRenderingContext2d, JsVal
         .map_err(|_| JsValue::from_str("2d context has an unexpected type"))
 }
 
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "the curve maps lightness 0..=1 back onto 0..=255"
+)]
+fn darken(rgba: &mut [u8], darkness: i8) {
+    let gamma = MAX_GAMMA.powf(f64::from(darkness) / f64::from(MAX_DARKNESS));
+    let curve: Vec<u8> = (0..=u8::MAX)
+        .map(|level| (255.0 * (f64::from(level) / 255.0).powf(gamma)).round() as u8)
+        .collect();
+    for pixel in rgba.as_chunks_mut::<4>().0 {
+        for channel in &mut pixel[..3] {
+            *channel = curve[usize::from(*channel)];
+        }
+    }
+}
+
 fn signed(dots: u32) -> i32 {
     i32::try_from(dots).expect("label dots fit i32")
 }
@@ -156,4 +229,51 @@ fn dots(dots: u32) -> usize {
 
 fn error(error: impl std::fmt::Display) -> JsValue {
     JsValue::from_str(&error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn gray(level: u8, count: usize) -> Vec<u8> {
+        [level, level, level, 255].repeat(count)
+    }
+
+    fn dot_count(rgba: &[u8]) -> usize {
+        let bitmap = Bitmap::from_rgba(64, 64, rgba, Raster::Dither);
+        (0..64)
+            .flat_map(|y| (0..64).map(move |x| (x, y)))
+            .filter(|&(x, y)| bitmap.is_black(x, y))
+            .count()
+    }
+
+    #[test]
+    fn neutral_darkness_changes_nothing() {
+        let original: Vec<u8> = (0..=u8::MAX).flat_map(|level| gray(level, 1)).collect();
+        let mut pixels = original.clone();
+        darken(&mut pixels, 0);
+        assert_eq!(pixels, original);
+    }
+
+    #[test]
+    fn darkness_keeps_white_and_black() {
+        for darkness in -MAX_DARKNESS..=MAX_DARKNESS {
+            let mut pixels = [gray(255, 1), gray(0, 1)].concat();
+            darken(&mut pixels, darkness);
+            assert_eq!(pixels, [gray(255, 1), gray(0, 1)].concat(), "{darkness}");
+        }
+    }
+
+    #[test]
+    fn darker_gray_prints_more_dots() {
+        let counts: Vec<usize> = [-5, 0, 5]
+            .into_iter()
+            .map(|darkness| {
+                let mut pixels = gray(160, 64 * 64);
+                darken(&mut pixels, darkness);
+                dot_count(&pixels)
+            })
+            .collect();
+        assert!(counts.is_sorted() && counts[0] < counts[2], "{counts:?}");
+    }
 }
