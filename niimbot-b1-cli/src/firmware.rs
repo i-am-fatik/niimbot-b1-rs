@@ -261,6 +261,220 @@ fn hex(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
 
+    const FIRMWARE_DIR: &str = "../firmware";
+    const RAM_LEN: u32 = 0x0004_0000;
+    const TAG_USED: u32 = 0x0002_E458 + 0x0E;
+    const TAG_TOTAL: u32 = 0x0002_E458 + 0x4E;
+    const OVERUSE_FLAG_WORD: u32 = 0x0002_0614 + 0x14;
+    const OVERUSE_FLAG: u32 = 1 << 19;
+    const COUNT_LABEL_FN: u32 = 0x0102_4E52;
+    const PAST_THE_LIMIT_CHECK: u32 = 0x0102_4E94;
+
+    struct Core<'a> {
+        reg: [u32; 16],
+        carry: bool,
+        zero: bool,
+        image: &'a [u8],
+        ram: Vec<u8>,
+    }
+
+    impl<'a> Core<'a> {
+        fn new(image: &'a [u8]) -> Self {
+            Self {
+                reg: [0; 16],
+                carry: false,
+                zero: false,
+                image,
+                ram: vec![0; RAM_LEN as usize],
+            }
+        }
+
+        fn load_u8(&self, address: u32) -> u8 {
+            if address >= BASE {
+                self.image[(address - BASE) as usize]
+            } else {
+                self.ram[address as usize]
+            }
+        }
+
+        fn load_u16(&self, address: u32) -> u32 {
+            u32::from(u16::from_le_bytes([
+                self.load_u8(address),
+                self.load_u8(address + 1),
+            ]))
+        }
+
+        fn load_u32(&self, address: u32) -> u32 {
+            u32::from_le_bytes([
+                self.load_u8(address),
+                self.load_u8(address + 1),
+                self.load_u8(address + 2),
+                self.load_u8(address + 3),
+            ])
+        }
+
+        fn store_u8(&mut self, address: u32, value: u8) {
+            self.ram[address as usize] = value;
+        }
+
+        fn store_u16(&mut self, address: u32, value: u16) {
+            let [low, high] = value.to_le_bytes();
+            self.store_u8(address, low);
+            self.store_u8(address + 1, high);
+        }
+
+        fn store_u32(&mut self, address: u32, value: u32) {
+            let [a, b, c, d] = value.to_le_bytes();
+            self.store_u8(address, a);
+            self.store_u8(address + 1, b);
+            self.store_u8(address + 2, c);
+            self.store_u8(address + 3, d);
+        }
+
+        fn run(&mut self, entry: u32, stop: u32) {
+            let mut pc = entry;
+            for _ in 0..1000 {
+                if pc == stop {
+                    return;
+                }
+                pc = self.step(pc);
+            }
+            panic!("firmware function did not reach {stop:#x}");
+        }
+
+        fn step(&mut self, pc: u32) -> u32 {
+            let op = u16::try_from(self.load_u16(pc)).expect("16-bit opcode");
+            let field = |shift: u32| usize::from((op >> shift) & 7);
+            let mut next = pc + 2;
+            match op >> 12 {
+                0 | 1 if op & 0xFE00 == 0x1800 => {
+                    self.reg[field(0)] = self.reg[field(3)].wrapping_add(self.reg[field(6)]);
+                }
+                0 | 1 if op & 0xFE00 == 0x1C00 => {
+                    self.reg[field(0)] = self.reg[field(3)].wrapping_add(u32::from((op >> 6) & 7));
+                }
+                0 | 1 if op & 0xF800 == 0 => {
+                    self.reg[field(0)] = self.reg[field(3)] << ((op >> 6) & 0x1F);
+                }
+                2 | 3 if op & 0x0800 == 0 => {
+                    self.reg[usize::from((op >> 8) & 7)] = u32::from(op & 0xFF);
+                }
+                2 | 3 => {
+                    let rd = usize::from((op >> 8) & 7);
+                    self.reg[rd] = self.reg[rd].wrapping_add(u32::from(op & 0xFF));
+                }
+                4 if op >> 11 == 0b0_1001 => {
+                    let base = (pc + 4) & !3;
+                    self.reg[usize::from((op >> 8) & 7)] =
+                        self.load_u32(base + u32::from((op & 0xFF) << 2));
+                }
+                4 if op >> 10 == 0b01_0000 => {
+                    let rm = self.reg[field(3)];
+                    let rdn = field(0);
+                    match (op >> 6) & 0xF {
+                        0b1010 => {
+                            self.zero = self.reg[rdn] == rm;
+                            self.carry = self.reg[rdn] >= rm;
+                        }
+                        0b1100 => self.reg[rdn] |= rm,
+                        0b1101 => self.reg[rdn] = self.reg[rdn].wrapping_mul(rm),
+                        other => panic!("unsupported alu op {other:#x} at {pc:#x}"),
+                    }
+                }
+                4 if op >> 8 == 0x46 => {
+                    let rd = usize::from(((op >> 4) & 8) | (op & 7));
+                    self.reg[rd] = self.reg[usize::from((op >> 3) & 0xF)];
+                }
+                5 if op & 0xFE00 == 0x5A00 => {
+                    let address = self.reg[field(3)].wrapping_add(self.reg[field(6)]);
+                    self.reg[field(0)] = self.load_u16(address);
+                }
+                6 => {
+                    let address = self.reg[field(3)].wrapping_add(u32::from((op >> 6) & 0x1F) << 2);
+                    if op & 0x0800 == 0 {
+                        self.store_u32(address, self.reg[field(0)]);
+                    } else {
+                        self.reg[field(0)] = self.load_u32(address);
+                    }
+                }
+                7 => {
+                    let address = self.reg[field(3)].wrapping_add(u32::from((op >> 6) & 0x1F));
+                    if op & 0x0800 == 0 {
+                        let byte = u8::try_from(self.reg[field(0)] & 0xFF).expect("byte");
+                        self.store_u8(address, byte);
+                    } else {
+                        self.reg[field(0)] = u32::from(self.load_u8(address));
+                    }
+                }
+                8 => {
+                    let address = self.reg[field(3)].wrapping_add(u32::from((op >> 6) & 0x1F) << 1);
+                    if op & 0x0800 == 0 {
+                        let half = u16::try_from(self.reg[field(0)] & 0xFFFF).expect("halfword");
+                        self.store_u16(address, half);
+                    } else {
+                        self.reg[field(0)] = self.load_u16(address);
+                    }
+                }
+                0xB if op & 0xFE00 == 0xB400 => {
+                    let with_lr = u32::from((op >> 8) & 1);
+                    let count = (op & 0xFF).count_ones() + with_lr;
+                    self.reg[13] = self.reg[13].wrapping_sub(4 * count);
+                    let mut address = self.reg[13];
+                    for r in 0u16..8 {
+                        if op & (1 << r) != 0 {
+                            self.store_u32(address, self.reg[usize::from(r)]);
+                            address += 4;
+                        }
+                    }
+                    if with_lr == 1 {
+                        self.store_u32(address, self.reg[14]);
+                    }
+                }
+                0xD if (op >> 8) & 0xF == 0b1001 => {
+                    let raw = i32::from(op & 0xFF);
+                    let offset = if raw >= 0x80 { raw - 0x100 } else { raw };
+                    if !self.carry || self.zero {
+                        next = (pc + 4).wrapping_add_signed(offset * 2);
+                    }
+                }
+                _ => panic!("unsupported opcode {op:#06x} at {pc:#x}"),
+            }
+            next
+        }
+    }
+
+    fn refuses_to_print(image: &[u8], used: u16, total: u16) -> bool {
+        let mut core = Core::new(image);
+        core.store_u16(TAG_USED, used);
+        core.store_u16(TAG_TOTAL, total);
+        core.reg[13] = RAM_LEN;
+        core.run(COUNT_LABEL_FN, PAST_THE_LIMIT_CHECK);
+        core.load_u32(OVERUSE_FLAG_WORD) & OVERUSE_FLAG != 0
+    }
+
+    fn read_stock() -> Option<Vec<u8>> {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join(FIRMWARE_DIR)
+            .join(STOCK);
+        let image = fs::read(path).ok()?;
+        (image.len() == IMAGE_LEN).then_some(image)
+    }
+
+    #[test]
+    fn nolock_firmware_prints_a_roll_the_stock_firmware_refuses() {
+        let Some(stock) = read_stock() else {
+            eprintln!("skipping: firmware/{STOCK} not present");
+            return;
+        };
+        let mut nolock = stock.clone();
+        never_reject_roll(&mut nolock).expect("patch the stock image");
+
+        assert!(refuses_to_print(&stock, 277, 276));
+        assert!(!refuses_to_print(&nolock, 277, 276));
+        assert!(!refuses_to_print(&stock, 100, 276));
+        assert!(!refuses_to_print(&nolock, 100, 276));
+    }
+
     #[test]
     fn thumb_bl_matches_the_python_encoder() {
         assert_eq!(
