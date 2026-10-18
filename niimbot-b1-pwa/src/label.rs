@@ -9,6 +9,8 @@ const BORDER_WIDTH: f64 = 3.0;
 const LINE_SPACING: f64 = 1.15;
 pub(crate) const MAX_DARKNESS: i8 = 10;
 const MAX_GAMMA: f64 = 4.0;
+const QUARTERS: [(f64, f64); 4] = [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)];
+const TEXT_ID: &str = "text";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Align {
@@ -26,6 +28,12 @@ pub(crate) struct Picture {
     pub(crate) offset: (f64, f64),
     pub(crate) rotation: i16,
     pub(crate) darkness: i8,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum Layer {
+    Text { offset: (f64, f64) },
+    Picture(Picture),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -86,14 +94,58 @@ impl Frame {
     }
 }
 
+impl Layer {
+    pub(crate) fn id(&self) -> &str {
+        match self {
+            Self::Text { .. } => TEXT_ID,
+            Self::Picture(picture) => &picture.id,
+        }
+    }
+
+    pub(crate) fn name(&self) -> &str {
+        match self {
+            Self::Text { .. } => "Text",
+            Self::Picture(picture) => &picture.name,
+        }
+    }
+
+    pub(crate) fn is_text(&self) -> bool {
+        matches!(self, Self::Text { .. })
+    }
+
+    pub(crate) fn picture(&self) -> Option<&Picture> {
+        match self {
+            Self::Text { .. } => None,
+            Self::Picture(picture) => Some(picture),
+        }
+    }
+
+    pub(crate) fn offset(&self) -> (f64, f64) {
+        match self {
+            Self::Text { offset } | Self::Picture(Picture { offset, .. }) => *offset,
+        }
+    }
+
+    pub(crate) fn offset_mut(&mut self) -> &mut (f64, f64) {
+        match self {
+            Self::Text { offset } | Self::Picture(Picture { offset, .. }) => offset,
+        }
+    }
+}
+
 impl Picture {
-    pub(crate) fn new(id: String, name: String, image: HtmlImageElement) -> Self {
+    pub(crate) fn new(
+        id: String,
+        name: String,
+        image: HtmlImageElement,
+        (size, offset): (u16, (f64, f64)),
+    ) -> Self {
         Self {
             id,
             name,
             image,
-            size: 100,
-            offset: (0.0, 0.0),
+            size,
+            offset,
             rotation: 0,
             darkness: 0,
         }
@@ -145,18 +197,40 @@ impl Label {
         }
     }
 
-    pub(crate) fn picture_at(&self, pictures: &[Picture], point: (f64, f64)) -> Option<usize> {
+    fn upright_size(&self) -> (f64, f64) {
         let (width, height) = self.upright();
-        let label = (f64::from(width), f64::from(height));
-        pictures
-            .iter()
-            .rposition(|picture| picture.frame(label).contains(point))
+        (f64::from(width), f64::from(height))
+    }
+
+    pub(crate) fn landing(&self, earlier: usize) -> (u16, (f64, f64)) {
+        let Some(quarter) = earlier.checked_sub(1) else {
+            return (100, (0.0, 0.0));
+        };
+        let (width, height) = self.upright_size();
+        let (x, y) = QUARTERS[quarter % QUARTERS.len()];
+        (50, (x * width / 4.0, y * height / 4.0))
+    }
+
+    pub(crate) fn layer_at(
+        &self,
+        canvas: &HtmlCanvasElement,
+        layers: &[Layer],
+        point: (f64, f64),
+    ) -> Option<usize> {
+        let label = self.upright_size();
+        let context = context(canvas).ok()?;
+        layers.iter().rposition(|layer| match layer {
+            Layer::Text { offset } => self
+                .text_frame(&context, label, *offset)
+                .is_ok_and(|frame| frame.width > 0.0 && frame.contains(point)),
+            Layer::Picture(picture) => picture.frame(label).contains(point),
+        })
     }
 
     pub(crate) fn rasterize(
         &self,
         canvas: &HtmlCanvasElement,
-        pictures: &[Picture],
+        layers: &[Layer],
     ) -> Result<Bitmap, JsValue> {
         let (width, height) = self.upright();
         canvas.set_width(width);
@@ -166,48 +240,20 @@ impl Label {
 
         context.set_fill_style_str("#fff");
         context.fill_rect(0.0, 0.0, w, h);
-        for picture in pictures
-            .iter()
-            .filter(|picture| picture.image.natural_width() > 0)
-        {
-            let frame = picture.frame((w, h));
-            if picture.darkness == 0 {
-                frame.draw(&context, &picture.image)?;
-            } else {
-                let layer = darkened(picture, frame, width, height)?;
-                context.draw_image_with_html_canvas_element(&layer, 0.0, 0.0)?;
+        for layer in layers {
+            match layer {
+                Layer::Text { offset } => self.draw_text(&context, (w, h), *offset)?,
+                Layer::Picture(picture) if picture.image.natural_width() > 0 => {
+                    let frame = picture.frame((w, h));
+                    if picture.darkness == 0 {
+                        frame.draw(&context, &picture.image)?;
+                    } else {
+                        let layer = darkened(picture, frame, width, height)?;
+                        context.draw_image_with_html_canvas_element(&layer, 0.0, 0.0)?;
+                    }
+                }
+                Layer::Picture(_) => {}
             }
-        }
-
-        context.set_fill_style_str("#000");
-        context.set_font(&format!(
-            "{} {}px {}",
-            if self.bold { "bold" } else { "normal" },
-            self.font_size,
-            self.font
-        ));
-        context.set_text_baseline("middle");
-        let x = match self.align {
-            Align::Left => {
-                context.set_text_align("left");
-                MARGIN
-            }
-            Align::Center => {
-                context.set_text_align("center");
-                w / 2.0
-            }
-            Align::Right => {
-                context.set_text_align("right");
-                w - MARGIN
-            }
-        };
-        let lines: Vec<&str> = self.text.lines().collect();
-        let line_height = f64::from(self.font_size) * LINE_SPACING;
-        let block_height = line_height * f64::from(u16::try_from(lines.len()).unwrap_or(u16::MAX));
-        let mut y = (h - block_height) / 2.0 + line_height / 2.0;
-        for line in lines {
-            context.fill_text(line, x, y)?;
-            y += line_height;
         }
 
         if self.border {
@@ -232,6 +278,80 @@ impl Label {
             &pixels,
             self.raster,
         ))
+    }
+
+    fn draw_text(
+        &self,
+        context: &CanvasRenderingContext2d,
+        (width, height): (f64, f64),
+        offset: (f64, f64),
+    ) -> Result<(), JsValue> {
+        context.set_fill_style_str("#000");
+        self.set_text_style(context);
+        let x = self.text_anchor(width) + offset.0;
+        let (lines, line_height, block_height) = self.text_block();
+        let mut y = (height - block_height) / 2.0 + line_height / 2.0 + offset.1;
+        for line in lines {
+            context.fill_text(line, x, y)?;
+            y += line_height;
+        }
+        Ok(())
+    }
+
+    fn text_frame(
+        &self,
+        context: &CanvasRenderingContext2d,
+        (width, height): (f64, f64),
+        offset: (f64, f64),
+    ) -> Result<Frame, JsValue> {
+        self.set_text_style(context);
+        let anchor = self.text_anchor(width);
+        let (lines, _, block_height) = self.text_block();
+        let mut widest = 0.0_f64;
+        for line in lines {
+            widest = widest.max(context.measure_text(line)?.width());
+        }
+        let left = match self.align {
+            Align::Left => anchor,
+            Align::Center => anchor - widest / 2.0,
+            Align::Right => anchor - widest,
+        };
+        Ok(Frame {
+            centre: (left + widest / 2.0 + offset.0, height / 2.0 + offset.1),
+            width: widest,
+            height: block_height,
+            angle: 0.0,
+        })
+    }
+
+    fn set_text_style(&self, context: &CanvasRenderingContext2d) {
+        context.set_font(&format!(
+            "{} {}px {}",
+            if self.bold { "bold" } else { "normal" },
+            self.font_size,
+            self.font
+        ));
+        context.set_text_baseline("middle");
+        context.set_text_align(match self.align {
+            Align::Left => "left",
+            Align::Center => "center",
+            Align::Right => "right",
+        });
+    }
+
+    fn text_anchor(&self, width: f64) -> f64 {
+        match self.align {
+            Align::Left => MARGIN,
+            Align::Center => width / 2.0,
+            Align::Right => width - MARGIN,
+        }
+    }
+
+    fn text_block(&self) -> (Vec<&str>, f64, f64) {
+        let lines: Vec<&str> = self.text.lines().collect();
+        let line_height = f64::from(self.font_size) * LINE_SPACING;
+        let block_height = line_height * f64::from(u16::try_from(lines.len()).unwrap_or(u16::MAX));
+        (lines, line_height, block_height)
     }
 
     pub(crate) fn show(&self, bitmap: &Bitmap, preview: &HtmlCanvasElement) -> Result<(), JsValue> {

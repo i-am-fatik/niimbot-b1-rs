@@ -57,7 +57,9 @@ Open `http://localhost:8787` in Chrome or Edge, press Connect USB or Connect Blu
 | Width, Height mm | Label size at 8 dots per mm, width capped at the 48 mm head |
 | Orientation | Vertical lays the label out a quarter turn round, upright in the preview and turned back on print. Width and Height stay the label as loaded |
 | Rendering | Sharp thresholds text, Dithered suits photos |
-| Images | Add one or more, drawn under the text in the order added. Press one on the preview or pick it in the list to select it, drag to move it, Remove deletes it |
+| Text | Its own layer, on top at first. Press it on the preview or pick Text in the list to select it, drag to move it, Align lines up its rows |
+| Images | Add one or more. The first fills the label, each next one lands at half size in the next quarter, above the other images. Press one on the preview or pick it in the list to select it, drag to move it, Remove deletes it |
+| Layers, Move up, Move down | The list shows the top layer first, the text included. The buttons move the selected image or the text one layer up or down |
 | Image size | Scales the selected image from a tenth to four times its fitted size |
 | Image rotation, Rotate 90° | Turns the selected image to any angle, or a quarter turn clockwise per press. It refits to stay whole inside the label |
 | Image darkness | Left prints the selected image lighter, right darker, the middle leaves it as drawn |

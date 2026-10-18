@@ -7,7 +7,7 @@ use web_sys::{
     FileSystemGetFileOptions, FileSystemWritableFileStream, HtmlInputElement, Storage,
 };
 
-use crate::label::Picture;
+use crate::label::Layer;
 
 const KEY: &str = "b1-labels";
 const FIELDS: [&str; 13] = [
@@ -30,6 +30,10 @@ const FIELDS: [&str; 13] = [
 pub(crate) struct Saved {
     fields: Vec<(String, String)>,
     pub(crate) pictures: Vec<SavedPicture>,
+    #[serde(default)]
+    pub(crate) text_layer: Option<usize>,
+    #[serde(default)]
+    text_offset: (f64, f64),
     pub(crate) selected: Option<String>,
 }
 
@@ -46,11 +50,7 @@ pub(crate) struct SavedPicture {
 }
 
 impl Saved {
-    pub(crate) fn capture(
-        document: &Document,
-        pictures: &[Picture],
-        selected: Option<usize>,
-    ) -> Self {
+    pub(crate) fn capture(document: &Document, stack: &[Layer], selected: Option<usize>) -> Self {
         Self {
             fields: FIELDS
                 .iter()
@@ -59,8 +59,9 @@ impl Saved {
                     Some((id.to_owned(), value))
                 })
                 .collect(),
-            pictures: pictures
+            pictures: stack
                 .iter()
+                .filter_map(Layer::picture)
                 .map(|picture| SavedPicture {
                     id: picture.id.clone(),
                     name: picture.name.clone(),
@@ -70,9 +71,20 @@ impl Saved {
                     darkness: picture.darkness,
                 })
                 .collect(),
+            text_layer: stack.iter().position(Layer::is_text),
+            text_offset: stack
+                .iter()
+                .find(|layer| layer.is_text())
+                .map_or((0.0, 0.0), Layer::offset),
             selected: selected
-                .and_then(|index| pictures.get(index))
-                .map(|picture| picture.id.clone()),
+                .and_then(|index| stack.get(index))
+                .map(|layer| layer.id().to_owned()),
+        }
+    }
+
+    pub(crate) fn text(&self) -> Layer {
+        Layer::Text {
+            offset: self.text_offset,
         }
     }
 

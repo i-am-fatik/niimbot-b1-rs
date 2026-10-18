@@ -107,6 +107,10 @@ textarea { resize: vertical; }
 label.button { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px; font-weight: 600; color: var(--accent); border-color: var(--accent); }
 label.button:hover { background: color-mix(in srgb, var(--accent) 10%, var(--panel)); }
 #add-picture:focus-visible + label.button { outline: 2px solid var(--accent); outline-offset: 2px; }
+.layers { display: flex; gap: 8px; }
+.layers[hidden] { display: none; }
+.layers select { flex: 1; }
+.layer-buttons { display: grid; gap: 8px; align-content: start; }
 .rotation { display: flex; gap: 8px; align-items: end; }
 .rotation label { flex: 1; }
 #preview.movable { cursor: grab; touch-action: none; }
@@ -124,7 +128,7 @@ label.button:hover { background: color-mix(in srgb, var(--accent) 10%, var(--pan
 </header>
 <main>
   <section class="preview" aria-label="Print preview">
-    <canvas id="preview" width="384" height="240"></canvas>
+    <canvas id="preview" class="movable" width="384" height="240"></canvas>
     <p id="size"></p>
   </section>
   <form id="label" autocomplete="off">
@@ -174,7 +178,13 @@ B1</textarea></label>
         <label class="button" for="add-picture"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 16 16"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>Add images</label>
         <button id="remove-picture" type="button" disabled>Remove</button>
       </div>
-      <select id="picture-list" size="3" aria-label="Images on the label" hidden></select>
+      <div id="layers" class="layers" hidden>
+        <select id="layer-list" size="4" aria-label="Layers, top first"></select>
+        <div class="layer-buttons">
+          <button id="raise-layer" type="button" disabled>Move up</button>
+          <button id="lower-layer" type="button" disabled>Move down</button>
+        </div>
+      </div>
       <label>Image size <input id="picture-size" type="range" min="10" max="400" value="100" disabled></label>
       <div class="rotation">
         <label>Image rotation <input id="picture-rotation" type="range" min="-180" max="180" value="0" disabled></label>

@@ -17,7 +17,7 @@ use web_sys::{
     Storage, Url,
 };
 
-use crate::label::{Align, Label, MAX_DARKNESS, Picture};
+use crate::label::{Align, Label, Layer, MAX_DARKNESS, Picture};
 use crate::saved::Saved;
 
 const NO_SERIAL: &str = "This browser has no Web Serial. Use Chrome or Edge on a desktop.";
@@ -34,6 +34,7 @@ pub fn start() -> Result<(), JsValue> {
     App::wire(&app)?;
     let saved = app.storage.as_ref().map(Saved::read).unwrap_or_default();
     saved.restore_fields(&app.document);
+    app.stack.replace(vec![saved.text()]);
     app.render();
     app.sync_controls();
     spawn_local(Rc::clone(&app).restore_pictures(saved));
@@ -55,9 +56,9 @@ enum Connection {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct Drag {
-    pointer_start: (f64, f64),
-    offset_start: (f64, f64),
+struct DragStart {
+    pointer: (f64, f64),
+    offset: (f64, f64),
 }
 
 #[derive(Debug)]
@@ -81,7 +82,10 @@ struct Page {
     border: HtmlInputElement,
     add_picture: HtmlInputElement,
     remove_picture: HtmlButtonElement,
-    picture_list: HtmlSelectElement,
+    layers: HtmlElement,
+    layer_list: HtmlSelectElement,
+    raise_layer: HtmlButtonElement,
+    lower_layer: HtmlButtonElement,
     picture_size: HtmlInputElement,
     picture_rotation: HtmlInputElement,
     turn_picture: HtmlButtonElement,
@@ -99,9 +103,9 @@ struct App {
     storage: Option<Storage>,
     canvas: HtmlCanvasElement,
     connection: RefCell<Connection>,
-    pictures: RefCell<Vec<Picture>>,
+    stack: RefCell<Vec<Layer>>,
     selected: Cell<Option<usize>>,
-    drag: Cell<Option<Drag>>,
+    drag: Cell<Option<DragStart>>,
     bitmap: RefCell<Bitmap>,
 }
 
@@ -130,7 +134,10 @@ impl App {
             border: element(&document, "border")?,
             add_picture: element(&document, "add-picture")?,
             remove_picture: element(&document, "remove-picture")?,
-            picture_list: element(&document, "picture-list")?,
+            layers: element(&document, "layers")?,
+            layer_list: element(&document, "layer-list")?,
+            raise_layer: element(&document, "raise-layer")?,
+            lower_layer: element(&document, "lower-layer")?,
             picture_size: element(&document, "picture-size")?,
             picture_rotation: element(&document, "picture-rotation")?,
             turn_picture: element(&document, "turn-picture")?,
@@ -153,7 +160,7 @@ impl App {
             storage,
             canvas,
             connection: RefCell::new(Connection::Disconnected),
-            pictures: RefCell::new(Vec::new()),
+            stack: RefCell::new(Vec::new()),
             selected: Cell::new(None),
             drag: Cell::new(None),
             bitmap: RefCell::new(Bitmap::blank(0, 0)),
@@ -181,17 +188,21 @@ impl App {
             spawn_local(Rc::clone(app).add_pictures());
         })?;
         on(&page.remove_picture, "click", app, Self::remove_picture)?;
-        on(&page.picture_list, "change", app, |app| {
-            app.select_picture(usize::try_from(app.page.picture_list.selected_index()).ok());
+        on(&page.layer_list, "change", app, |app| {
+            let row = usize::try_from(app.page.layer_list.selected_index()).ok();
+            let count = app.stack.borrow().len();
+            app.select_layer(row.and_then(|row| top_first(count, row)));
             app.save();
         })?;
+        on(&page.raise_layer, "click", app, |app| app.restack(1))?;
+        on(&page.lower_layer, "click", app, |app| app.restack(-1))?;
         on(&page.form, "input", app, Self::save)?;
         on(&page.picture_size, "input", app, Self::resize_picture)?;
         on(&page.picture_rotation, "input", app, Self::rotate_picture)?;
         on(&page.turn_picture, "click", app, Self::turn_picture)?;
         on(&page.picture_darkness, "input", app, Self::darken_picture)?;
         on_pointer(&page.preview, "pointerdown", app, Self::start_drag)?;
-        on_pointer(&page.preview, "pointermove", app, Self::drag_picture)?;
+        on_pointer(&page.preview, "pointermove", app, Self::drag_layer)?;
         on(&page.preview, "pointerup", app, Self::end_drag)?;
         on(&page.preview, "pointercancel", app, Self::end_drag)?;
         on(&page.connect_usb, "click", app, |app| {
@@ -251,7 +262,7 @@ impl App {
     fn render(self: &Rc<Self>) {
         let label = self.label();
         let rendered = label
-            .rasterize(&self.canvas, &self.pictures.borrow())
+            .rasterize(&self.canvas, &self.stack.borrow())
             .and_then(|bitmap| label.show(&bitmap, &self.page.preview).map(|()| bitmap));
         match rendered {
             Ok(bitmap) => {
@@ -284,7 +295,14 @@ impl App {
                 ));
                 continue;
             };
-            let picture = Picture::new(random_id(), file.name(), image);
+            let earlier = self
+                .stack
+                .borrow()
+                .iter()
+                .filter_map(Layer::picture)
+                .count();
+            let landing = self.label().landing(earlier);
+            let picture = Picture::new(random_id(), file.name(), image, landing);
             if self.storage.is_some()
                 && let Err(error) = saved::store_file(&picture.id, &file).await
             {
@@ -296,6 +314,7 @@ impl App {
     }
 
     async fn restore_pictures(self: Rc<Self>, saved: Saved) {
+        let mut restored = Vec::new();
         for picture in saved.pictures {
             let Ok(file) = saved::load_file(&picture.id).await else {
                 continue;
@@ -303,7 +322,7 @@ impl App {
             let Ok(image) = decode(&file).await else {
                 continue;
             };
-            self.add_picture(Picture {
+            restored.push(Layer::Picture(Picture {
                 id: picture.id,
                 name: picture.name,
                 image,
@@ -311,84 +330,151 @@ impl App {
                 offset: picture.offset,
                 rotation: picture.rotation,
                 darkness: picture.darkness,
-            });
+            }));
+        }
+        let text_at = saved
+            .text_layer
+            .unwrap_or(restored.len())
+            .min(restored.len());
+        {
+            let mut stack = self.stack.borrow_mut();
+            restored.splice(text_at..text_at, stack.drain(..));
+            *stack = restored;
         }
         let selected = saved.selected.and_then(|id| {
-            self.pictures
+            self.stack
                 .borrow()
                 .iter()
-                .position(|picture| picture.id == id)
+                .position(|layer| layer.id() == id)
         });
-        self.select_picture(selected);
+        self.list_layers();
+        self.select_layer(selected);
+        self.render();
     }
 
     fn save(self: &Rc<Self>) {
         let Some(storage) = &self.storage else {
             return;
         };
-        let saved = Saved::capture(&self.document, &self.pictures.borrow(), self.selected.get());
+        let saved = Saved::capture(&self.document, &self.stack.borrow(), self.selected.get());
         if let Err(error) = saved.write(storage) {
             web_sys::console::warn_1(&error);
         }
     }
 
     fn add_picture(self: &Rc<Self>, picture: Picture) {
-        let listed = HtmlOptionElement::new_with_text(&picture.name)
-            .and_then(|option| self.page.picture_list.add_with_html_option_element(&option));
-        if let Err(error) = listed {
-            self.fail(format!("{error:?}"));
-            return;
-        }
-        self.pictures.borrow_mut().push(picture);
-        self.select_picture(self.pictures.borrow().len().checked_sub(1));
+        let added = {
+            let mut stack = self.stack.borrow_mut();
+            let above_pictures = stack
+                .iter()
+                .rposition(|layer| layer.picture().is_some())
+                .map_or(0, |top| top + 1);
+            stack.insert(above_pictures, Layer::Picture(picture));
+            above_pictures
+        };
+        self.list_layers();
+        self.select_layer(Some(added));
         self.render();
+    }
+
+    fn list_layers(&self) {
+        let list = &self.page.layer_list;
+        list.set_length(0);
+        for layer in self.stack.borrow().iter().rev() {
+            let listed = HtmlOptionElement::new_with_text(layer.name())
+                .and_then(|option| list.add_with_html_option_element(&option));
+            if let Err(error) = listed {
+                self.fail(format!("{error:?}"));
+                return;
+            }
+        }
+    }
+
+    fn restack(self: &Rc<Self>, step: isize) {
+        let Some(index) = self.selected.get() else {
+            return;
+        };
+        let count = self.stack.borrow().len();
+        let Some(target) = index
+            .checked_add_signed(step)
+            .filter(|&target| target < count)
+        else {
+            return;
+        };
+        self.stack.borrow_mut().swap(index, target);
+        self.list_layers();
+        self.select_layer(Some(target));
+        self.render();
+        self.save();
     }
 
     fn remove_picture(self: &Rc<Self>) {
         let Some(index) = self.selected.get() else {
             return;
         };
-        let removed = self.pictures.borrow_mut().remove(index);
-        self.page
-            .picture_list
-            .remove_with_index(list_index(Some(index)));
-        self.select_picture(self.pictures.borrow().len().checked_sub(1));
+        let Some(id) = self
+            .stack
+            .borrow()
+            .get(index)
+            .and_then(Layer::picture)
+            .map(|picture| picture.id.clone())
+        else {
+            return;
+        };
+        self.stack.borrow_mut().remove(index);
+        self.list_layers();
+        let top_picture = self
+            .stack
+            .borrow()
+            .iter()
+            .rposition(|layer| layer.picture().is_some());
+        self.select_layer(top_picture);
         self.render();
         self.save();
         if self.storage.is_some() {
             spawn_local(async move {
-                if let Err(error) = saved::delete_file(&removed.id).await {
+                if let Err(error) = saved::delete_file(&id).await {
                     web_sys::console::warn_1(&error);
                 }
             });
         }
     }
 
-    fn select_picture(&self, index: Option<usize>) {
+    fn select_layer(&self, index: Option<usize>) {
         self.selected.set(index);
-        let pictures = self.pictures.borrow();
-        let selected = index.and_then(|index| pictures.get(index));
+        let stack = self.stack.borrow();
+        let picture = index
+            .and_then(|index| stack.get(index))
+            .and_then(Layer::picture);
         let page = &self.page;
-        page.picture_list.set_hidden(pictures.is_empty());
-        page.picture_list.set_selected_index(list_index(index));
-        page.picture_size.set_disabled(selected.is_none());
+        page.layers
+            .set_hidden(!stack.iter().any(|layer| layer.picture().is_some()));
+        page.layer_list.set_selected_index(
+            index
+                .and_then(|index| top_first(stack.len(), index))
+                .and_then(|row| i32::try_from(row).ok())
+                .unwrap_or(-1),
+        );
+        page.raise_layer
+            .set_disabled(index.is_none_or(|index| index + 1 >= stack.len()));
+        page.lower_layer
+            .set_disabled(index.is_none_or(|index| index == 0));
+        page.picture_size.set_disabled(picture.is_none());
         page.picture_size
-            .set_value(&selected.map_or(100, |picture| picture.size).to_string());
-        page.picture_rotation.set_disabled(selected.is_none());
+            .set_value(&picture.map_or(100, |picture| picture.size).to_string());
+        page.picture_rotation.set_disabled(picture.is_none());
         page.picture_rotation
-            .set_value(&selected.map_or(0, |picture| picture.rotation).to_string());
-        page.turn_picture.set_disabled(selected.is_none());
-        page.picture_darkness.set_disabled(selected.is_none());
+            .set_value(&picture.map_or(0, |picture| picture.rotation).to_string());
+        page.turn_picture.set_disabled(picture.is_none());
+        page.picture_darkness.set_disabled(picture.is_none());
         page.picture_darkness
-            .set_value(&selected.map_or(0, |picture| picture.darkness).to_string());
-        page.remove_picture.set_disabled(selected.is_none());
-        page.preview
-            .set_class_name(if pictures.is_empty() { "" } else { "movable" });
+            .set_value(&picture.map_or(0, |picture| picture.darkness).to_string());
+        page.remove_picture.set_disabled(picture.is_none());
     }
 
-    fn update_selected(&self, update: impl FnOnce(&mut Picture)) {
+    fn update_picture(&self, update: impl FnOnce(&mut Picture)) {
         if let Some(index) = self.selected.get()
-            && let Some(picture) = self.pictures.borrow_mut().get_mut(index)
+            && let Some(Layer::Picture(picture)) = self.stack.borrow_mut().get_mut(index)
         {
             update(picture);
         }
@@ -396,21 +482,21 @@ impl App {
 
     fn resize_picture(self: &Rc<Self>) {
         let size = parse(&self.page.picture_size.value(), 100).clamp(10, 400);
-        self.update_selected(|picture| picture.size = size);
+        self.update_picture(|picture| picture.size = size);
         self.render();
     }
 
     fn rotate_picture(self: &Rc<Self>) {
         let rotation = parse(&self.page.picture_rotation.value(), 0).clamp(-180, 180);
-        self.update_selected(|picture| picture.rotation = rotation);
+        self.update_picture(|picture| picture.rotation = rotation);
         self.render();
     }
 
     fn turn_picture(self: &Rc<Self>) {
-        self.update_selected(|picture| {
+        self.update_picture(|picture| {
             picture.rotation = (picture.rotation + 270).rem_euclid(360) - 180;
         });
-        self.select_picture(self.selected.get());
+        self.select_layer(self.selected.get());
         self.render();
         self.save();
     }
@@ -418,35 +504,39 @@ impl App {
     fn darken_picture(self: &Rc<Self>) {
         let darkness =
             parse(&self.page.picture_darkness.value(), 0).clamp(-MAX_DARKNESS, MAX_DARKNESS);
-        self.update_selected(|picture| picture.darkness = darkness);
+        self.update_picture(|picture| picture.darkness = darkness);
         self.render();
     }
 
     fn start_drag(self: &Rc<Self>, event: &PointerEvent) {
         let point = self.dots_at(event);
-        if let Some(hit) = self.label().picture_at(&self.pictures.borrow(), point) {
-            self.select_picture(Some(hit));
+        if let Some(hit) = self
+            .label()
+            .layer_at(&self.canvas, &self.stack.borrow(), point)
+        {
+            self.select_layer(Some(hit));
         }
         let Some(index) = self.selected.get() else {
             return;
         };
         let _captured = self.page.preview.set_pointer_capture(event.pointer_id());
-        self.drag.set(Some(Drag {
-            pointer_start: point,
-            offset_start: self.pictures.borrow()[index].offset,
+        self.drag.set(Some(DragStart {
+            pointer: point,
+            offset: self.stack.borrow()[index].offset(),
         }));
     }
 
-    fn drag_picture(self: &Rc<Self>, event: &PointerEvent) {
-        let Some(drag) = self.drag.get() else {
+    fn drag_layer(self: &Rc<Self>, event: &PointerEvent) {
+        let (Some(start), Some(index)) = (self.drag.get(), self.selected.get()) else {
             return;
         };
         let (x, y) = self.dots_at(event);
-        let offset = (
-            drag.offset_start.0 + x - drag.pointer_start.0,
-            drag.offset_start.1 + y - drag.pointer_start.1,
-        );
-        self.update_selected(|picture| picture.offset = offset);
+        if let Some(layer) = self.stack.borrow_mut().get_mut(index) {
+            *layer.offset_mut() = (
+                start.offset.0 + x - start.pointer.0,
+                start.offset.1 + y - start.pointer.1,
+            );
+        }
         self.render();
     }
 
@@ -654,10 +744,8 @@ fn random_id() -> String {
     js_sys::Math::random().to_string()
 }
 
-fn list_index(index: Option<usize>) -> i32 {
-    index
-        .and_then(|index| i32::try_from(index).ok())
-        .unwrap_or(-1)
+fn top_first(count: usize, position: usize) -> Option<usize> {
+    count.checked_sub(position + 1)
 }
 
 fn element<T: JsCast>(document: &Document, id: &str) -> Result<T, JsValue> {
