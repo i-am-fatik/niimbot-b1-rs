@@ -4,6 +4,8 @@
 mod gesture;
 mod label;
 mod saved;
+#[cfg(all(test, target_arch = "wasm32"))]
+mod tests;
 
 use std::cell::{Cell, RefCell};
 use std::fmt::Display;
@@ -30,7 +32,7 @@ const NO_BLUETOOTH: &str = "This browser has no Web Bluetooth. Use Chrome or Edg
 /// # Errors
 ///
 /// When the page lacks an element the app expects.
-#[wasm_bindgen(start)]
+#[cfg_attr(not(test), wasm_bindgen(start))]
 pub fn start() -> Result<(), JsValue> {
     let app = Rc::new(App::new()?);
     App::wire(&app)?;

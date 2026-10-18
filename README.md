@@ -88,9 +88,12 @@ API docs: `cargo doc -p niimbot-b1 --features serial,ble --open`. The wire proto
 ```sh
 cargo fmt --all --check
 cargo clippy --workspace --all-targets
-cargo clippy -p niimbot-b1-pwa --target wasm32-unknown-unknown
+cargo clippy -p niimbot-b1-pwa --all-targets --target wasm32-unknown-unknown
 cargo test --workspace
+wasm-pack test --headless --chrome niimbot-b1-pwa
 ```
+
+The last line runs the web app's tests in headless Chrome against the real page: adding images, layers and the text layer, selecting, dragging, centre lines, edges, Center, touch gestures, size, rotation, darkness, orientation, field sizes, removing, saving and restoring.
 
 ## Credits
 
