@@ -4,8 +4,9 @@ use crate::protocol::Hex;
 
 pub(crate) const VERSION: [u8; 2] = [6, 19];
 
+const STOCK: &str = "B1 6.19 stock";
 const KNOWN: [(&str, &str); 3] = [
-    ("fd9efd1441b5f05ca46c310b8d162dc1", "B1 6.19 stock"),
+    ("fd9efd1441b5f05ca46c310b8d162dc1", STOCK),
     ("540ef521d7416cfe1eb561b6effcb0b4", "B1 6.19 patched"),
     (
         "6fd1612be6fb0cfb0ffb27808df3c44c",
@@ -35,6 +36,18 @@ impl Firmware {
     #[must_use]
     pub fn name(&self) -> &'static str {
         self.name
+    }
+
+    /// Whether this is the stock image, the input [`Firmware::build`] patches.
+    #[must_use]
+    pub fn is_stock(&self) -> bool {
+        self.name == STOCK
+    }
+
+    /// The image's bytes.
+    #[must_use]
+    pub fn image(&self) -> &[u8] {
+        &self.image
     }
 }
 

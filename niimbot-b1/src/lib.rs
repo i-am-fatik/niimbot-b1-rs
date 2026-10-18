@@ -24,6 +24,7 @@
 mod bitmap;
 mod error;
 mod firmware;
+mod patch;
 mod printer;
 mod protocol;
 mod transport;
@@ -31,6 +32,7 @@ mod transport;
 pub use bitmap::{Bitmap, Raster};
 pub use error::Error;
 pub use firmware::Firmware;
+pub use patch::{PatchError, Patched};
 pub use printer::{Heartbeat, PrintOptions, PrintStatus, Printer, RfidInfo};
 pub use protocol::{LabelType, PRINTHEAD_PX};
 #[cfg(feature = "ble")]
