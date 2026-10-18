@@ -10,7 +10,7 @@ use web_sys::{
 use crate::label::Picture;
 
 const KEY: &str = "b1-labels";
-const FIELDS: [&str; 13] = [
+const FIELDS: [&str; 12] = [
     "width",
     "height",
     "text",
@@ -20,7 +20,6 @@ const FIELDS: [&str; 13] = [
     "align",
     "border",
     "raster",
-    "darkness",
     "density",
     "copies",
     "label-type",
@@ -39,6 +38,10 @@ pub(crate) struct SavedPicture {
     pub(crate) name: String,
     pub(crate) size: u16,
     pub(crate) offset: (f64, f64),
+    #[serde(default)]
+    pub(crate) rotation: i16,
+    #[serde(default)]
+    pub(crate) darkness: i8,
 }
 
 impl Saved {
@@ -62,6 +65,8 @@ impl Saved {
                     name: picture.name.clone(),
                     size: picture.size,
                     offset: picture.offset,
+                    rotation: picture.rotation,
+                    darkness: picture.darkness,
                 })
                 .collect(),
             selected: selected

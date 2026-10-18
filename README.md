@@ -56,9 +56,10 @@ Open `http://localhost:8787` in Chrome or Edge, press Connect USB or Connect Blu
 |---|---|
 | Width, Height mm | Label size at 8 dots per mm, width capped at the 48 mm head |
 | Rendering | Sharp thresholds text, Dithered suits photos |
-| Darkness | Left prints lighter, right darker, the middle leaves the label as drawn |
 | Images | Add one or more, drawn under the text in the order added. Press one on the preview or pick it in the list to select it, drag to move it, Remove deletes it |
 | Image size | Scales the selected image from a tenth to four times its fitted size |
+| Image rotation, Rotate 90° | Turns the selected image to any angle, or a quarter turn clockwise per press. It refits to stay whole inside the label |
+| Image darkness | Left prints the selected image lighter, right darker, the middle leaves it as drawn |
 | Density, Copies, Media | Same as the CLI options |
 
 ## Library

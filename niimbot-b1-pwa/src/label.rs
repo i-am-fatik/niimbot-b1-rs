@@ -24,14 +24,66 @@ pub(crate) struct Picture {
     pub(crate) image: HtmlImageElement,
     pub(crate) size: u16,
     pub(crate) offset: (f64, f64),
+    pub(crate) rotation: i16,
+    pub(crate) darkness: i8,
 }
 
 #[derive(Debug, Clone, Copy)]
 struct Frame {
-    x: f64,
-    y: f64,
+    centre: (f64, f64),
     width: f64,
     height: f64,
+    angle: f64,
+}
+
+impl Frame {
+    fn fit(
+        (natural_width, natural_height): (f64, f64),
+        (label_width, label_height): (f64, f64),
+        size: u16,
+        offset: (f64, f64),
+        rotation: i16,
+    ) -> Self {
+        let angle = f64::from(rotation).to_radians();
+        let (sin, cos) = (angle.sin().abs(), angle.cos().abs());
+        let turned_width = natural_width * cos + natural_height * sin;
+        let turned_height = natural_width * sin + natural_height * cos;
+        let scale = (label_width / turned_width).min(label_height / turned_height)
+            * f64::from(size)
+            / 100.0;
+        Self {
+            centre: (label_width / 2.0 + offset.0, label_height / 2.0 + offset.1),
+            width: natural_width * scale,
+            height: natural_height * scale,
+            angle,
+        }
+    }
+
+    fn contains(&self, (x, y): (f64, f64)) -> bool {
+        let (sin, cos) = self.angle.sin_cos();
+        let (dx, dy) = (x - self.centre.0, y - self.centre.1);
+        (dx * cos + dy * sin).abs() <= self.width / 2.0
+            && (dy * cos - dx * sin).abs() <= self.height / 2.0
+    }
+
+    fn draw(
+        &self,
+        context: &CanvasRenderingContext2d,
+        image: &HtmlImageElement,
+    ) -> Result<(), JsValue> {
+        context.save();
+        context.translate(self.centre.0, self.centre.1)?;
+        context.rotate(self.angle)?;
+        let drawn = context.draw_image_with_html_image_element_and_dw_and_dh(
+            image,
+            -self.width / 2.0,
+            -self.height / 2.0,
+            self.width,
+            self.height,
+        );
+        context.restore();
+        drawn
+    }
 }
 
 impl Picture {
@@ -42,22 +94,22 @@ impl Picture {
             image,
             size: 100,
             offset: (0.0, 0.0),
+            rotation: 0,
+            darkness: 0,
         }
     }
 
-    fn frame(&self, label_width: f64, label_height: f64) -> Frame {
-        let natural_width = f64::from(self.image.natural_width());
-        let natural_height = f64::from(self.image.natural_height());
-        let scale = (label_width / natural_width).min(label_height / natural_height)
-            * f64::from(self.size)
-            / 100.0;
-        let (width, height) = (natural_width * scale, natural_height * scale);
-        Frame {
-            x: (label_width - width) / 2.0 + self.offset.0,
-            y: (label_height - height) / 2.0 + self.offset.1,
-            width,
-            height,
-        }
+    fn frame(&self, label: (f64, f64)) -> Frame {
+        Frame::fit(
+            (
+                f64::from(self.image.natural_width()),
+                f64::from(self.image.natural_height()),
+            ),
+            label,
+            self.size,
+            self.offset,
+            self.rotation,
+        )
     }
 }
 
@@ -72,7 +124,6 @@ pub(crate) struct Label {
     pub(crate) align: Align,
     pub(crate) border: bool,
     pub(crate) raster: Raster,
-    pub(crate) darkness: i8,
 }
 
 impl Label {
@@ -85,13 +136,11 @@ impl Label {
         u32::from(self.height_mm) * DOTS_PER_MM
     }
 
-    pub(crate) fn picture_at(&self, pictures: &[Picture], (x, y): (f64, f64)) -> Option<usize> {
-        let (width, height) = (f64::from(self.width()), f64::from(self.height()));
-        pictures.iter().rposition(|picture| {
-            let frame = picture.frame(width, height);
-            (frame.x..frame.x + frame.width).contains(&x)
-                && (frame.y..frame.y + frame.height).contains(&y)
-        })
+    pub(crate) fn picture_at(&self, pictures: &[Picture], point: (f64, f64)) -> Option<usize> {
+        let label = (f64::from(self.width()), f64::from(self.height()));
+        pictures
+            .iter()
+            .rposition(|picture| picture.frame(label).contains(point))
     }
 
     pub(crate) fn rasterize(
@@ -111,14 +160,13 @@ impl Label {
             .iter()
             .filter(|picture| picture.image.natural_width() > 0)
         {
-            let frame = picture.frame(w, h);
-            context.draw_image_with_html_image_element_and_dw_and_dh(
-                &picture.image,
-                frame.x,
-                frame.y,
-                frame.width,
-                frame.height,
-            )?;
+            let frame = picture.frame((w, h));
+            if picture.darkness == 0 {
+                frame.draw(&context, &picture.image)?;
+            } else {
+                let layer = darkened(picture, frame, width, height)?;
+                context.draw_image_with_html_canvas_element(&layer, 0.0, 0.0)?;
+            }
         }
 
         context.set_fill_style_str("#000");
@@ -159,11 +207,10 @@ impl Label {
             context.stroke_rect(inset, inset, w - BORDER_WIDTH, h - BORDER_WIDTH);
         }
 
-        let mut pixels = context
+        let pixels = context
             .get_image_data(0, 0, signed(width), signed(height))?
             .data()
             .0;
-        darken(&mut pixels, self.darkness);
         Ok(Bitmap::from_rgba(
             dots(width),
             dots(height),
@@ -200,6 +247,31 @@ fn context(canvas: &HtmlCanvasElement) -> Result<CanvasRenderingContext2d, JsVal
         .ok_or_else(|| JsValue::from_str("canvas has no 2d context"))?
         .dyn_into()
         .map_err(|_| JsValue::from_str("2d context has an unexpected type"))
+}
+
+fn darkened(
+    picture: &Picture,
+    frame: Frame,
+    width: u32,
+    height: u32,
+) -> Result<HtmlCanvasElement, JsValue> {
+    let layer: HtmlCanvasElement = web_sys::window()
+        .and_then(|window| window.document())
+        .ok_or("no document")?
+        .create_element("canvas")?
+        .dyn_into()?;
+    layer.set_width(width);
+    layer.set_height(height);
+    let context = context(&layer)?;
+    frame.draw(&context, &picture.image)?;
+    let mut pixels = context
+        .get_image_data(0, 0, signed(width), signed(height))?
+        .data()
+        .0;
+    darken(&mut pixels, picture.darkness);
+    let image = ImageData::new_with_u8_clamped_array_and_sh(Clamped(&pixels), width, height)?;
+    context.put_image_data(&image, 0, 0)?;
+    Ok(layer)
 }
 
 #[expect(
@@ -245,6 +317,22 @@ mod tests {
             .flat_map(|y| (0..64).map(move |x| (x, y)))
             .filter(|&(x, y)| bitmap.is_black(x, y))
             .count()
+    }
+
+    #[test]
+    fn quarter_turn_refits_to_the_label_height() {
+        let frame = Frame::fit((200.0, 100.0), (384.0, 240.0), 100, (0.0, 0.0), 90);
+        assert!(
+            (frame.width - 240.0).abs() < 1e-9 && (frame.height - 120.0).abs() < 1e-9,
+            "{frame:?}"
+        );
+    }
+
+    #[test]
+    fn hit_test_follows_the_turned_outline() {
+        let frame = Frame::fit((200.0, 100.0), (384.0, 240.0), 100, (0.0, 0.0), 90);
+        assert!(frame.contains((192.0, 10.0)));
+        assert!(!frame.contains((100.0, 120.0)));
     }
 
     #[test]

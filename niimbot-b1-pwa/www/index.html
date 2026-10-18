@@ -56,7 +56,7 @@ body {
 header, main { max-width: 960px; margin: 0 auto; padding: 16px; }
 header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
 h1 { font-size: 1.25rem; margin: 0 auto 0 0; }
-button {
+button, .button {
   font: inherit;
   padding: 8px 14px;
   border-radius: 8px;
@@ -102,7 +102,13 @@ input, select, textarea {
 input[type="checkbox"] { width: auto; accent-color: var(--accent); }
 input[type="range"] { padding: 0; border: 0; background: none; accent-color: var(--accent); }
 textarea { resize: vertical; }
-.picture { display: flex; gap: 8px; align-items: center; }
+.picture { position: relative; display: flex; gap: 8px; }
+#add-picture { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); opacity: 0; }
+label.button { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px; font-weight: 600; color: var(--accent); border-color: var(--accent); }
+label.button:hover { background: color-mix(in srgb, var(--accent) 10%, var(--panel)); }
+#add-picture:focus-visible + label.button { outline: 2px solid var(--accent); outline-offset: 2px; }
+.rotation { display: flex; gap: 8px; align-items: end; }
+.rotation label { flex: 1; }
 #preview.movable { cursor: grab; touch-action: none; }
 #preview.movable:active { cursor: grabbing; }
 #print { width: 100%; padding: 12px; }
@@ -155,17 +161,20 @@ B1</textarea></label>
           </select>
         </label>
       </div>
-      <label>Darkness <input id="darkness" type="range" min="-10" max="10" value="0"></label>
       <label class="check"><input id="bold" type="checkbox" checked> Bold</label>
       <label class="check"><input id="border" type="checkbox"> Border</label>
-      <label>Images
-        <span class="picture">
-          <input id="add-picture" type="file" accept="image/*" multiple>
-          <button id="remove-picture" type="button" disabled>Remove</button>
-        </span>
-      </label>
+      <div class="picture">
+        <input id="add-picture" type="file" accept="image/*" multiple>
+        <label class="button" for="add-picture"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 16 16"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>Add images</label>
+        <button id="remove-picture" type="button" disabled>Remove</button>
+      </div>
       <select id="picture-list" size="3" aria-label="Images on the label" hidden></select>
       <label>Image size <input id="picture-size" type="range" min="10" max="400" value="100" disabled></label>
+      <div class="rotation">
+        <label>Image rotation <input id="picture-rotation" type="range" min="-180" max="180" value="0" disabled></label>
+        <button id="turn-picture" type="button" disabled>Rotate 90°</button>
+      </div>
+      <label>Image darkness <input id="picture-darkness" type="range" min="-10" max="10" value="0" disabled></label>
     </fieldset>
     <fieldset>
       <legend>Print</legend>

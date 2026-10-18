@@ -82,8 +82,10 @@ struct Page {
     remove_picture: HtmlButtonElement,
     picture_list: HtmlSelectElement,
     picture_size: HtmlInputElement,
+    picture_rotation: HtmlInputElement,
+    turn_picture: HtmlButtonElement,
+    picture_darkness: HtmlInputElement,
     raster: HtmlSelectElement,
-    darkness: HtmlInputElement,
     density: HtmlSelectElement,
     copies: HtmlInputElement,
     label_type: HtmlSelectElement,
@@ -128,8 +130,10 @@ impl App {
             remove_picture: element(&document, "remove-picture")?,
             picture_list: element(&document, "picture-list")?,
             picture_size: element(&document, "picture-size")?,
+            picture_rotation: element(&document, "picture-rotation")?,
+            turn_picture: element(&document, "turn-picture")?,
+            picture_darkness: element(&document, "picture-darkness")?,
             raster: element(&document, "raster")?,
-            darkness: element(&document, "darkness")?,
             density: element(&document, "density")?,
             copies: element(&document, "copies")?,
             label_type: element(&document, "label-type")?,
@@ -156,7 +160,7 @@ impl App {
 
     fn wire(app: &Rc<Self>) -> Result<(), JsValue> {
         let page = &app.page;
-        let label_fields: [&HtmlElement; 10] = [
+        let label_fields: [&HtmlElement; 9] = [
             &page.width,
             &page.height,
             &page.text,
@@ -166,7 +170,6 @@ impl App {
             &page.align,
             &page.border,
             &page.raster,
-            &page.darkness,
         ];
         for field in label_fields {
             on(field, "input", app, Self::render)?;
@@ -181,6 +184,9 @@ impl App {
         })?;
         on(&page.form, "input", app, Self::save)?;
         on(&page.picture_size, "input", app, Self::resize_picture)?;
+        on(&page.picture_rotation, "input", app, Self::rotate_picture)?;
+        on(&page.turn_picture, "click", app, Self::turn_picture)?;
+        on(&page.picture_darkness, "input", app, Self::darken_picture)?;
         on_pointer(&page.preview, "pointerdown", app, Self::start_drag)?;
         on_pointer(&page.preview, "pointermove", app, Self::drag_picture)?;
         on(&page.preview, "pointerup", app, Self::end_drag)?;
@@ -226,7 +232,6 @@ impl App {
             } else {
                 Raster::Threshold
             },
-            darkness: parse(&page.darkness.value(), 0).clamp(-MAX_DARKNESS, MAX_DARKNESS),
         }
     }
 
@@ -300,6 +305,8 @@ impl App {
                 image,
                 size: picture.size,
                 offset: picture.offset,
+                rotation: picture.rotation,
+                darkness: picture.darkness,
             });
         }
         let selected = saved.selected.and_then(|id| {
@@ -363,6 +370,13 @@ impl App {
         page.picture_size.set_disabled(selected.is_none());
         page.picture_size
             .set_value(&selected.map_or(100, |picture| picture.size).to_string());
+        page.picture_rotation.set_disabled(selected.is_none());
+        page.picture_rotation
+            .set_value(&selected.map_or(0, |picture| picture.rotation).to_string());
+        page.turn_picture.set_disabled(selected.is_none());
+        page.picture_darkness.set_disabled(selected.is_none());
+        page.picture_darkness
+            .set_value(&selected.map_or(0, |picture| picture.darkness).to_string());
         page.remove_picture.set_disabled(selected.is_none());
         page.preview
             .set_class_name(if pictures.is_empty() { "" } else { "movable" });
@@ -379,6 +393,28 @@ impl App {
     fn resize_picture(self: &Rc<Self>) {
         let size = parse(&self.page.picture_size.value(), 100).clamp(10, 400);
         self.update_selected(|picture| picture.size = size);
+        self.render();
+    }
+
+    fn rotate_picture(self: &Rc<Self>) {
+        let rotation = parse(&self.page.picture_rotation.value(), 0).clamp(-180, 180);
+        self.update_selected(|picture| picture.rotation = rotation);
+        self.render();
+    }
+
+    fn turn_picture(self: &Rc<Self>) {
+        self.update_selected(|picture| {
+            picture.rotation = (picture.rotation + 270).rem_euclid(360) - 180;
+        });
+        self.select_picture(self.selected.get());
+        self.render();
+        self.save();
+    }
+
+    fn darken_picture(self: &Rc<Self>) {
+        let darkness =
+            parse(&self.page.picture_darkness.value(), 0).clamp(-MAX_DARKNESS, MAX_DARKNESS);
+        self.update_selected(|picture| picture.darkness = darkness);
         self.render();
     }
 
