@@ -47,7 +47,7 @@ Writes `firmware/B1_6.19_density_align7.bin`, MD5 `540ef521d7416cfe1eb561b6effcb
 ./target/release/niimbot-b1 flash firmware/B1_6.19_density_align7_nolock.bin
 ```
 
-Flashes over USB and refuses Bluetooth. It takes only those two images or the stock `B1_6.19_stock.bin`, recognized by MD5, and refuses any other file before touching the printer. The printer turns itself off when done, its button turns it back on. Flashing the stock file rolls back. The web app's Firmware section does the same over Connect USB.
+Flashes over USB and refuses Bluetooth. It takes only those two images or the stock `B1_6.19_stock.bin`, recognized by MD5, and refuses any other file before touching the printer. The printer turns itself off when done, its button turns it back on. Flashing the stock file rolls back. The web app's Firmware section does the same over Connect USB, and builds the image that never locks from the stock file in the browser.
 
 ## Web app
 
@@ -74,6 +74,7 @@ Open `http://localhost:8787` in Chrome or Edge, press Connect USB or Connect Blu
 | Image darkness | Left prints the selected image lighter, right darker, the middle leaves it as drawn |
 | Density, Copies, Media | Same as the CLI options |
 | Firmware | Pick a `.bin`, the app names it or refuses it. Flash over USB writes it after a confirmation, only the stock 6.19 image and the two patched ones, only over Connect USB, with progress in the status line. Hidden in browsers without Web Serial |
+| Build without NFC lock | One click builds the image that never locks. The app downloads the stock image through its own server, or uses a picked stock file, fetches the density image from GitHub, checks every stage by MD5, selects the result for Flash over USB and offers Save image. On a plain static host, download the stock firmware with the link and pick it first |
 
 ## Library
 

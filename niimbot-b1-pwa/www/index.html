@@ -121,6 +121,11 @@ label.button:hover { background: color-mix(in srgb, var(--accent) 10%, var(--pan
 #preview.movable { cursor: grab; touch-action: none; }
 #preview.movable:active { cursor: grabbing; }
 .hint { display: none; margin: 0; color: var(--muted); font-size: 0.85rem; }
+.note { margin: 0; color: var(--muted); font-size: 0.85rem; }
+.note a { color: var(--accent); }
+.firmware-buttons { display: flex; gap: 8px; }
+.firmware-buttons > * { flex: 1; }
+a.button { text-align: center; text-decoration: none; }
 @media (pointer: coarse) {
   .hint { display: block; }
   button, .button, input:not([type="checkbox"]):not([type="file"]), select, label.check { min-height: 44px; }
@@ -238,7 +243,12 @@ B1</textarea></label>
     </fieldset>
     <fieldset id="firmware">
       <legend>Firmware</legend>
+      <p class="note">Build without NFC lock downloads the stock firmware and patches it. If this server cannot pass the download on, <a id="stock-firmware" href="https://fw.niim.blue/stable/B1/B1_6.19.bin">download the stock firmware</a> and pick it here first.</p>
       <label>Image <input id="firmware-file" type="file" accept=".bin"></label>
+      <div class="firmware-buttons">
+        <button id="build-firmware" type="button">Build without NFC lock</button>
+        <a id="save-firmware" class="button" hidden>Save image</a>
+      </div>
       <button id="flash" type="button" disabled>Flash over USB</button>
     </fieldset>
   </form>

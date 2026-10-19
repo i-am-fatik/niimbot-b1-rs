@@ -1,5 +1,5 @@
 //! Browser app that composes a label on a canvas and prints it on a Niimbot B1 over Web Serial
-//! or Web Bluetooth, and flashes a known firmware image over Web Serial.
+//! or Web Bluetooth, and builds and flashes a known firmware image over Web Serial.
 
 mod gesture;
 mod label;
@@ -11,14 +11,16 @@ use std::cell::{Cell, RefCell};
 use std::fmt::Display;
 use std::rc::Rc;
 
-use js_sys::Uint8Array;
-use niimbot_b1::{Bitmap, Error, Firmware, LabelType, PrintOptions, Printer, Raster, WebTransport};
+use js_sys::{Array, Uint8Array};
+use niimbot_b1::{
+    Bitmap, Error, Firmware, LabelType, Patched, PrintOptions, Printer, Raster, WebTransport,
+};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::{JsFuture, spawn_local};
 use web_sys::{
-    Blob, Document, HtmlButtonElement, HtmlCanvasElement, HtmlElement, HtmlImageElement,
-    HtmlInputElement, HtmlOptionElement, HtmlSelectElement, HtmlTextAreaElement, PointerEvent,
-    Storage, Url,
+    Blob, Document, HtmlAnchorElement, HtmlButtonElement, HtmlCanvasElement, HtmlElement,
+    HtmlImageElement, HtmlInputElement, HtmlOptionElement, HtmlSelectElement, HtmlTextAreaElement,
+    PointerEvent, Response, Storage, Url,
 };
 
 use crate::gesture::Pinch;
@@ -27,6 +29,9 @@ use crate::saved::Saved;
 
 const NO_SERIAL: &str = "This browser has no Web Serial. Use Chrome or Edge on a desktop.";
 const NO_BLUETOOTH: &str = "This browser has no Web Bluetooth. Use Chrome or Edge.";
+const DENSITY_COEFF_URL: &str = "https://raw.githubusercontent.com/lotabout/niimbot/niimbot-hw6.01/firmware/B1_6.19_density_coeff.bin";
+const NOLOCK_FILE: &str = "B1_6.19_density_align7_nolock.bin";
+const STOCK_FIRMWARE: &str = "firmware/B1_6.19.bin";
 
 /// Starts the app when the module loads.
 ///
@@ -113,6 +118,8 @@ struct Page {
     label_type: HtmlSelectElement,
     firmware: HtmlElement,
     firmware_file: HtmlInputElement,
+    build_firmware: HtmlButtonElement,
+    save_firmware: HtmlAnchorElement,
     flash: HtmlButtonElement,
 }
 
@@ -175,6 +182,8 @@ impl App {
             label_type: element(&document, "label-type")?,
             firmware: element(&document, "firmware")?,
             firmware_file: element(&document, "firmware-file")?,
+            build_firmware: element(&document, "build-firmware")?,
+            save_firmware: element(&document, "save-firmware")?,
             flash: element(&document, "flash")?,
         };
         let canvas = document.create_element("canvas")?.dyn_into()?;
@@ -256,6 +265,9 @@ impl App {
         })?;
         on(&page.firmware_file, "change", app, |app| {
             spawn_local(Rc::clone(app).choose_firmware());
+        })?;
+        on(&page.build_firmware, "click", app, |app| {
+            spawn_local(Rc::clone(app).build_firmware());
         })?;
         on(&page.flash, "click", app, |app| {
             spawn_local(Rc::clone(app).flash());
@@ -818,8 +830,68 @@ impl App {
                 file.name()
             )),
         }
+        self.page.save_firmware.set_hidden(true);
         *self.firmware.borrow_mut() = firmware;
         self.sync_controls();
+    }
+
+    async fn build_firmware(self: Rc<Self>) {
+        self.page.build_firmware.set_disabled(true);
+        let built = self.patch_stock().await.and_then(|patched| {
+            self.offer_save(&patched.nolock)?;
+            Ok(patched.nolock)
+        });
+        match built {
+            Ok(firmware) => {
+                self.say(&format!(
+                    "Built {}, Flash over USB writes it and Save image keeps a copy",
+                    firmware.name()
+                ));
+                *self.firmware.borrow_mut() = Some(firmware);
+            }
+            Err(error) => self.fail(error),
+        }
+        self.page.build_firmware.set_disabled(false);
+        self.sync_controls();
+    }
+
+    async fn patch_stock(&self) -> Result<Patched, String> {
+        let picked = self.firmware.borrow().clone().filter(Firmware::is_stock);
+        let stock = if let Some(stock) = picked {
+            stock
+        } else {
+            self.say("Downloading the stock firmware...");
+            download(STOCK_FIRMWARE)
+                .await
+                .ok()
+                .and_then(Firmware::identify)
+                .filter(Firmware::is_stock)
+                .ok_or_else(|| {
+                    "The stock firmware did not download, download it with the link above and pick it"
+                        .to_owned()
+                })?
+        };
+        self.say("Downloading the density image from GitHub...");
+        let density_coeff = download(DENSITY_COEFF_URL)
+            .await
+            .map_err(|error| format!("The density image did not download: {error:?}"))?;
+        Firmware::build(stock.image(), &density_coeff).map_err(|error| error.to_string())
+    }
+
+    fn offer_save(&self, firmware: &Firmware) -> Result<(), String> {
+        let link = &self.page.save_firmware;
+        let blob =
+            Blob::new_with_u8_array_sequence(&Array::of1(&Uint8Array::from(firmware.image())))
+                .and_then(|blob| Url::create_object_url_with_blob(&blob))
+                .map_err(|error| format!("{error:?}"))?;
+        let earlier = link.href();
+        if earlier.starts_with("blob:") {
+            let _revoked = Url::revoke_object_url(&earlier);
+        }
+        link.set_href(&blob);
+        link.set_download(NOLOCK_FILE);
+        link.set_hidden(false);
+        Ok(())
     }
 
     async fn flash(self: Rc<Self>) {
@@ -1005,6 +1077,18 @@ async fn decode(blob: &Blob) -> Result<HtmlImageElement, JsValue> {
     let decoded = JsFuture::from(image.decode()).await;
     Url::revoke_object_url(&url)?;
     decoded.map(|_| image)
+}
+
+async fn download(url: &str) -> Result<Vec<u8>, JsValue> {
+    let window = web_sys::window().ok_or("no window")?;
+    let response: Response = JsFuture::from(window.fetch_with_str(url))
+        .await?
+        .dyn_into()?;
+    if !response.ok() {
+        return Err(format!("{url} answered {}", response.status()).into());
+    }
+    let buffer = JsFuture::from(response.array_buffer()?).await?;
+    Ok(Uint8Array::new(&buffer).to_vec())
 }
 
 fn random_id() -> String {

@@ -547,6 +547,26 @@ async fn unknown_firmware_is_refused() {
     .await;
     assert!(text("status").contains("random.bin is not a known B1 firmware image"));
     assert!(button("flash").disabled());
+    assert!(element::<HtmlElement>("save-firmware").hidden());
+}
+
+#[wasm_bindgen_test]
+async fn build_without_the_stock_firmware_points_to_the_link() {
+    fresh().await;
+    assert_eq!(
+        element::<Element>("stock-firmware")
+            .get_attribute("href")
+            .unwrap(),
+        "https://fw.niim.blue/stable/B1/B1_6.19.bin"
+    );
+    button("build-firmware").click();
+    wait_for("the failure", || {
+        element::<HtmlElement>("status").class_name() == "error"
+    })
+    .await;
+    assert!(text("status").contains("download it with the link above and pick it"));
+    assert!(element::<HtmlElement>("save-firmware").hidden());
+    assert!(!button("build-firmware").disabled());
 }
 
 #[wasm_bindgen_test]
