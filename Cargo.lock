@@ -783,7 +783,7 @@ dependencies = [
 
 [[package]]
 name = "niimbot-b1"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "btleplug",
  "crc32fast",
@@ -801,7 +801,7 @@ dependencies = [
 
 [[package]]
 name = "niimbot-b1-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -815,7 +815,7 @@ dependencies = [
 
 [[package]]
 name = "niimbot-b1-pwa"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "js-sys",
  "niimbot-b1",

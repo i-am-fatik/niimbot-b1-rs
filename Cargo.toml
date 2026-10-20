@@ -3,7 +3,7 @@ resolver = "3"
 members = ["niimbot-b1", "niimbot-b1-cli", "niimbot-b1-pwa"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT"
@@ -13,7 +13,7 @@ keywords = ["niimbot", "b1", "label-printer", "thermal-printer", "bluetooth-le"]
 categories = ["hardware-support"]
 
 [workspace.dependencies]
-niimbot-b1 = { path = "niimbot-b1", version = "0.1.0" }
+niimbot-b1 = { path = "niimbot-b1", version = "0.2.0" }
 
 [workspace.lints.rust]
 missing_debug_implementations = "warn"
